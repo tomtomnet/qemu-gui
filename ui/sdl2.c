@@ -787,6 +787,7 @@ static void handle_windowevent(SDL_Event *ev)
         sdl2_redraw(scon);
         break;
     case SDL_WINDOWEVENT_FOCUS_GAINED:
+        sdl2_clipboard_focus();
         /* fall through */
     case SDL_WINDOWEVENT_ENTER:
         if (!gui_grab && (qemu_input_is_absolute(scon->dcl.con) || absolute_enabled)) {
@@ -802,6 +803,7 @@ static void handle_windowevent(SDL_Event *ev)
         scon->ignore_hotkeys = get_mod_state();
         break;
     case SDL_WINDOWEVENT_FOCUS_LOST:
+        sdl2_clipboard_focus();
         if (gui_grab && !gui_fullscreen) {
             sdl_grab_end(scon);
         }
@@ -929,6 +931,9 @@ void sdl2_poll_events(struct sdl2_console *scon)
             /* before the menu, which may take the event */
             sdl2_grab_follow_pointer(ev);
         }
+        if (ev->type == SDL_KEYDOWN || ev->type == SDL_MOUSEBUTTONDOWN) {
+            sdl2_clipboard_input();
+        }
 #ifdef CONFIG_SDL_GUI
         if (sdl2_menu_filter_event(ev)) {
             idle = 0;
@@ -972,6 +977,9 @@ void sdl2_poll_events(struct sdl2_console *scon)
             break;
         case SDL_WINDOWEVENT:
             handle_windowevent(ev);
+            break;
+        case SDL_CLIPBOARDUPDATE:
+            sdl2_clipboard_update();
             break;
         default:
             break;
@@ -1345,6 +1353,7 @@ static void sdl2_display_init(DisplayState *ds, DisplayOptions *o)
 
     mouse_mode_notifier.notify = sdl_mouse_mode_change;
     qemu_add_mouse_mode_change_notifier(&mouse_mode_notifier);
+    sdl2_clipboard_init();
 
     sdl_cursor_hidden = SDL_CreateCursor(&data, &data, 8, 1, 0, 0);
     sdl_cursor_normal = SDL_GetCursor();

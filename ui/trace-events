@@ -134,6 +134,10 @@ input_event_abs(int conidx, const char *axis, int value) "con %d, axis %s, value
 input_event_mtt(int conidx, const char *axis, int value) "con %d, axis %s, value 0x%x"
 input_event_sync(void) ""
 
+# sdl2-clipboard.c
+sdl2_clipboard_host(const char *what, size_t len) "host clipboard: %s (%zu bytes)"
+sdl2_clipboard_guest(const char *what, size_t len) "guest copy: %s (%zu bytes)"
+
 # sdl2-input.c
 sdl2_process_key(int sdl_scancode, unsigned int lnx, const char *action) "translated SDL scancode %d to Linux scancode %u (%s)"
 

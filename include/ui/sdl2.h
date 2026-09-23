@@ -74,6 +74,15 @@ static inline int sdl2_guest_height(struct sdl2_console *scon, int h)
 }
 void sdl2_poll_events(struct sdl2_console *scon);
 
+/* Clipboard sharing with the guest, see sdl2-clipboard.c */
+void sdl2_clipboard_init(void);
+/* The host clipboard changed (SDL_CLIPBOARDUPDATE) */
+void sdl2_clipboard_update(void);
+/* A window of the display got or lost the keyboard focus */
+void sdl2_clipboard_focus(void);
+/* A key or mouse button was pressed in a window of the display */
+void sdl2_clipboard_input(void);
+
 void sdl2_process_key(struct sdl2_console *scon,
                       SDL_KeyboardEvent *ev);
 void sdl2_release_modifiers(struct sdl2_console *scon);
