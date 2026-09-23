@@ -39,6 +39,10 @@
 #include <X11/Xlib.h>
 #endif
 
+#ifdef CONFIG_SDL_GUI
+#include "ui/sdl2-gui.h"
+#endif
+
 static int sdl2_num_outputs;
 static struct sdl2_console *sdl2_console;
 
@@ -57,6 +61,12 @@ static bool guest_cursor;
 static int guest_x, guest_y;
 static SDL_Cursor *guest_sprite;
 static Notifier mouse_mode_notifier;
+
+/* console whose window has the control menu */
+static struct sdl2_console *menu_scon;
+#ifdef CONFIG_SDL_GUI
+static bool menu_pointer;   /* the pointer is on the menu */
+#endif
 
 #define SDL2_REFRESH_INTERVAL_BUSY 10
 /* how long the busy refresh interval is kept after the last input event */
@@ -119,6 +129,18 @@ static void sdl2_update_refresh_rate(struct sdl2_console *scon)
         info.height = h;
     }
     info.refresh_rate = refresh_rate;
+    qemu_console_set_ui_info(scon->dcl.con, &info, true);
+}
+
+/* Ask the guest for a display filling the window, below the menu bar */
+static void sdl2_send_ui_size(struct sdl2_console *scon, int w, int h)
+{
+    QemuUIInfo info = {
+        .width = w,
+        .height = sdl2_guest_height(scon, h),
+        .refresh_rate = scon->refresh_rate,
+    };
+
     qemu_console_set_ui_info(scon->dcl.con, &info, true);
 }
 
@@ -192,6 +214,13 @@ void sdl2_window_create(struct sdl2_console *scon)
         scon->real_renderer = SDL_CreateRenderer(scon->real_window, -1, 0);
     }
 
+#ifdef CONFIG_SDL_GUI
+    /* not for the hidden window sdl2_gl_console_init() probes dma-buf with */
+    if (scon == menu_scon && !scon->hidden) {
+        sdl2_gui_init(scon->real_window, scon->winctx, scon->real_renderer);
+    }
+#endif
+
     sdl_update_caption(scon);
 }
 
@@ -200,6 +229,14 @@ void sdl2_window_destroy(struct sdl2_console *scon)
     if (!scon->real_window) {
         return;
     }
+
+#ifdef CONFIG_SDL_GUI
+    if (sdl2_gui_window() == scon->real_window) {
+        sdl2_gui_fini();
+        menu_pointer = false;
+    }
+#endif
+    scon->menu_top = 0;
 
     if (scon->winctx) {
         SDL_GL_DeleteContext(scon->winctx);
@@ -219,9 +256,10 @@ void sdl2_window_resize(struct sdl2_console *scon)
         return;
     }
 
+    /* the guest at its size, below the menu bar if docked */
     SDL_SetWindowSize(scon->real_window,
                       surface_width(scon->surface),
-                      surface_height(scon->surface));
+                      surface_height(scon->surface) + scon->menu_top);
 }
 
 static void sdl2_redraw(struct sdl2_console *scon)
@@ -345,14 +383,61 @@ static void sdl_grab_end(struct sdl2_console *scon)
     sdl_update_caption(scon);
 }
 
+/* Rows at the top of the window covered by the menu bar, docked or not */
+static int sdl2_menu_bar_rows(struct sdl2_console *scon)
+{
+#ifdef CONFIG_SDL_GUI
+    if (scon == menu_scon) {
+        return sdl2_gui_bar_height();
+    }
+#endif
+    return 0;
+}
+
+/*
+ * Is (@x, @y) over the guest display, at least @border pixels away from the
+ * window border and from the menu bar?
+ */
+static bool sdl2_pointer_on_guest(struct sdl2_console *scon, int x, int y,
+                                  int border)
+{
+    int w, h, top = sdl2_menu_bar_rows(scon);
+
+    SDL_GetWindowSize(scon->real_window, &w, &h);
+    return sdl2_pointer_inside(x, y - top, w, h - top, border);
+}
+
 static void absolute_mouse_grab(struct sdl2_console *scon)
 {
     int mouse_x, mouse_y;
-    int scr_w, scr_h;
+
     SDL_GetMouseState(&mouse_x, &mouse_y);
-    SDL_GetWindowSize(scon->real_window, &scr_w, &scr_h);
-    if (sdl2_pointer_inside(mouse_x, mouse_y, scr_w, scr_h,
-                            SDL2_GRAB_ACQUIRE_BORDER)) {
+    if (sdl2_pointer_on_guest(scon, mouse_x, mouse_y,
+                              SDL2_GRAB_ACQUIRE_BORDER)) {
+        sdl_grab_start(scon);
+    }
+}
+
+/*
+ * In absolute mode the grab is only held while the pointer is over the
+ * guest display, so that the pointer can leave through the window border
+ * and use the menu bar.  Runs for every motion, even those the menu takes.
+ */
+static void sdl2_grab_follow_pointer(SDL_Event *ev)
+{
+    struct sdl2_console *scon = get_scon_from_window(ev->motion.windowID);
+
+    if (!scon || !qemu_console_is_graphic(scon->dcl.con) ||
+        !(qemu_input_is_absolute(scon->dcl.con) || absolute_enabled)) {
+        return;
+    }
+    if (gui_grab && !gui_fullscreen &&
+        !sdl2_pointer_on_guest(scon, ev->motion.x, ev->motion.y,
+                               SDL2_GRAB_RELEASE_BORDER)) {
+        sdl_grab_end(scon);
+    } else if (!gui_grab &&
+               sdl2_pointer_on_guest(scon, ev->motion.x, ev->motion.y,
+                                     SDL2_GRAB_ACQUIRE_BORDER)) {
         sdl_grab_start(scon);
     }
 }
@@ -441,6 +526,25 @@ static int get_mod_state(void)
     }
 }
 
+/*
+ * The hotkey a key stands for.  Letters follow the keyboard layout, like
+ * the GTK display: Ctrl-Alt-M is the key that types M, on AZERTY too, and
+ * the key at the QWERTY position of M types a comma there.  Keys that type
+ * no ASCII character (non-Latin layouts) keep their QWERTY position, and so
+ * do digits, which AZERTY types with Shift.
+ */
+static SDL_Scancode sdl2_hotkey(const SDL_Keysym *keysym)
+{
+    if (keysym->sym >= SDLK_a && keysym->sym <= SDLK_z) {
+        return SDL_SCANCODE_A + (keysym->sym - SDLK_a);
+    }
+    if (keysym->scancode >= SDL_SCANCODE_A &&
+        keysym->scancode <= SDL_SCANCODE_Z && keysym->sym < 0x80) {
+        return SDL_SCANCODE_UNKNOWN;
+    }
+    return keysym->scancode;
+}
+
 static void handle_keydown(SDL_Event *ev)
 {
     int win;
@@ -454,7 +558,7 @@ static void handle_keydown(SDL_Event *ev)
     scon->gui_keysym = false;
 
     if (!scon->ignore_hotkeys && gui_key_modifier_pressed && !ev->key.repeat) {
-        switch (ev->key.keysym.scancode) {
+        switch (sdl2_hotkey(&ev->key.keysym)) {
         case SDL_SCANCODE_2:
         case SDL_SCANCODE_3:
         case SDL_SCANCODE_4:
@@ -501,6 +605,26 @@ static void handle_keydown(SDL_Event *ev)
             }
             scon->gui_keysym = true;
             break;
+#ifdef CONFIG_SDL_GUI
+        case SDL_SCANCODE_M:
+            if (scon == menu_scon) {
+                bool captured = gui_grab &&
+                                !qemu_input_is_absolute(scon->dcl.con) &&
+                                !absolute_enabled;
+
+                /*
+                 * In relative mode the pointer must be freed to use the
+                 * menu: if the menu bar is already shown, only do that.
+                 */
+                if (captured && sdl2_gui_bar_height()) {
+                    sdl_grab_end(scon);
+                } else if (sdl2_gui_toggle() && captured) {
+                    sdl_grab_end(scon);
+                }
+                scon->gui_keysym = true;
+            }
+            break;
+#endif
 #if 0
         case SDL_SCANCODE_KP_PLUS:
         case SDL_SCANCODE_KP_MINUS:
@@ -565,22 +689,13 @@ static void handle_mousemotion(SDL_Event *ev)
         return;
     }
 
+    /* the grab follows the pointer in sdl2_grab_follow_pointer() */
     SDL_GetWindowSize(scon->real_window, &scr_w, &scr_h);
-    if (qemu_input_is_absolute(scon->dcl.con) || absolute_enabled) {
-        if (gui_grab && !gui_fullscreen &&
-            !sdl2_pointer_inside(ev->motion.x, ev->motion.y, scr_w, scr_h,
-                                 SDL2_GRAB_RELEASE_BORDER)) {
-            sdl_grab_end(scon);
-        } else if (!gui_grab &&
-                   sdl2_pointer_inside(ev->motion.x, ev->motion.y, scr_w, scr_h,
-                                       SDL2_GRAB_ACQUIRE_BORDER)) {
-            sdl_grab_start(scon);
-        }
-    }
+    scr_h = sdl2_guest_height(scon, scr_h);
     surf_w = surface_width(scon->surface);
     surf_h = surface_height(scon->surface);
     x = (int64_t)ev->motion.x * surf_w / scr_w;
-    y = (int64_t)ev->motion.y * surf_h / scr_h;
+    y = (int64_t)MAX(ev->motion.y - scon->menu_top, 0) * surf_h / scr_h;
     dx = (int64_t)ev->motion.xrel * surf_w / scr_w;
     dy = (int64_t)ev->motion.yrel * surf_h / scr_h;
     if (gui_grab || qemu_input_is_absolute(scon->dcl.con) || absolute_enabled) {
@@ -602,7 +717,8 @@ static void handle_mousebutton(SDL_Event *ev)
     bev = &ev->button;
     SDL_GetWindowSize(scon->real_window, &scr_w, &scr_h);
     x = (int64_t)bev->x * surface_width(scon->surface) / scr_w;
-    y = (int64_t)bev->y * surface_height(scon->surface) / scr_h;
+    y = (int64_t)MAX(bev->y - scon->menu_top, 0) *
+        surface_height(scon->surface) / sdl2_guest_height(scon, scr_h);
 
     if (!gui_grab && !qemu_input_is_absolute(scon->dcl.con)) {
         if (ev->type == SDL_MOUSEBUTTONUP && bev->button == SDL_BUTTON_LEFT) {
@@ -658,14 +774,7 @@ static void handle_windowevent(SDL_Event *ev)
 
     switch (ev->window.event) {
     case SDL_WINDOWEVENT_RESIZED:
-        {
-            QemuUIInfo info = {
-                .width = ev->window.data1,
-                .height = ev->window.data2,
-                .refresh_rate = scon->refresh_rate,
-            };
-            qemu_console_set_ui_info(scon->dcl.con, &info, true);
-        }
+        sdl2_send_ui_size(scon, ev->window.data1, ev->window.data2);
         sdl2_redraw(scon);
         break;
     case SDL_WINDOWEVENT_MOVED:
@@ -726,6 +835,83 @@ static void handle_windowevent(SDL_Event *ev)
     }
 }
 
+#ifdef CONFIG_SDL_GUI
+/* The control menu sees input first; true if it takes the event */
+static bool sdl2_menu_filter_event(SDL_Event *ev)
+{
+    bool pointer_free;
+
+    if (!menu_scon || !menu_scon->real_window) {
+        return false;
+    }
+    /* hotkeys always reach the display */
+    if ((ev->type == SDL_KEYDOWN || ev->type == SDL_KEYUP) &&
+        get_mod_state()) {
+        return false;
+    }
+    pointer_free = !gui_grab || qemu_input_is_absolute(menu_scon->dcl.con) ||
+                   absolute_enabled;
+    return sdl2_gui_process_event(ev, pointer_free);
+}
+
+/* Show the host cursor over the menu, whatever the guest's is */
+static void sdl2_menu_cursor(struct sdl2_console *scon)
+{
+    bool on_menu = sdl2_gui_wants_pointer();
+
+    if (on_menu) {
+        SDL_SetCursor(sdl_cursor_normal);
+        SDL_ShowCursor(SDL_ENABLE);
+    } else if (menu_pointer) {
+        if (gui_grab && !guest_cursor) {
+            sdl_hide_cursor(scon);
+        } else {
+            sdl_show_cursor(scon);
+        }
+    }
+    menu_pointer = on_menu;
+}
+
+/*
+ * Build the next frame of the menu.  A changed menu normally reaches the
+ * screen with the next guest frame; if there was none since the previous
+ * refresh, e.g. because the guest is idle or paused, redraw.
+ */
+static void sdl2_menu_refresh(struct sdl2_console *scon)
+{
+    bool overdue = scon->menu_stale && !scon->menu_presented;
+    bool changed = sdl2_gui_update();
+    int top = sdl2_gui_docked_height();
+
+    if (top != scon->menu_top && scon->real_window) {
+        int w, h;
+
+        /* the menu bar was docked or undocked: resize the guest display */
+        scon->menu_top = top;
+        SDL_GetWindowSize(scon->real_window, &w, &h);
+        sdl2_send_ui_size(scon, w, h);
+        overdue = true;
+    }
+    if (overdue && scon->real_window) {
+        sdl2_redraw(scon);
+        changed = false;
+    }
+    scon->menu_stale = changed;
+    scon->menu_presented = false;
+    sdl2_menu_cursor(scon);
+}
+#endif
+
+void sdl2_draw_menu(struct sdl2_console *scon)
+{
+#ifdef CONFIG_SDL_GUI
+    if (scon == menu_scon) {
+        sdl2_gui_render();
+        scon->menu_presented = true;
+    }
+#endif
+}
+
 void sdl2_poll_events(struct sdl2_console *scon)
 {
     SDL_Event ev1, *ev = &ev1;
@@ -739,6 +925,16 @@ void sdl2_poll_events(struct sdl2_console *scon)
     }
 
     while (SDL_PollEvent(ev)) {
+        if (ev->type == SDL_MOUSEMOTION) {
+            /* before the menu, which may take the event */
+            sdl2_grab_follow_pointer(ev);
+        }
+#ifdef CONFIG_SDL_GUI
+        if (sdl2_menu_filter_event(ev)) {
+            idle = 0;
+            continue;
+        }
+#endif
         switch (ev->type) {
         case SDL_KEYDOWN:
             idle = 0;
@@ -796,7 +992,78 @@ void sdl2_poll_events(struct sdl2_console *scon)
         scon->idle_counter = 0;
         scon->dcl.update_interval = busy_interval;
     }
+
+#ifdef CONFIG_SDL_GUI
+    if (scon == menu_scon) {
+        sdl2_menu_refresh(scon);
+    }
+#endif
 }
+
+#ifdef CONFIG_SDL_GUI
+/* Display operations for the control menu */
+
+bool sdl2_gui_display_is_fullscreen(void)
+{
+    return gui_fullscreen;
+}
+
+void sdl2_gui_display_toggle_fullscreen(void)
+{
+    if (menu_scon && menu_scon->real_window) {
+        toggle_full_screen(menu_scon);
+    }
+}
+
+
+void sdl2_gui_display_release_grab(void)
+{
+    if (menu_scon && menu_scon->real_window && gui_grab) {
+        sdl_grab_end(menu_scon);
+    }
+}
+
+const char *sdl2_gui_display_hotkey(void)
+{
+    if (alt_grab) {
+        return "Ctrl+Alt+Shift+";
+    }
+    if (ctrl_grab) {
+        return "Right-Ctrl+";
+    }
+    return "Ctrl+Alt+";
+}
+
+uint32_t sdl2_gui_display_refresh_rate(void)
+{
+    return menu_scon ? menu_scon->refresh_rate : 0;
+}
+
+uint64_t sdl2_gui_display_frames(void)
+{
+    return menu_scon ? menu_scon->frames : 0;
+}
+
+bool sdl2_gui_display_guest_size(int *w, int *h)
+{
+    if (!menu_scon) {
+        return false;
+    }
+#ifdef CONFIG_OPENGL
+    if (menu_scon->scanout_mode) {
+        *w = menu_scon->w;
+        *h = menu_scon->h;
+        return true;
+    }
+#endif
+    if (!menu_scon->surface) {
+        return false;
+    }
+    *w = surface_width(menu_scon->surface);
+    *h = surface_height(menu_scon->surface);
+    return true;
+}
+#endif
 
 static void sdl_mouse_warp(DisplayChangeListener *dcl,
                            int x, int y, bool on)
@@ -871,6 +1138,7 @@ static void sdl_cleanup(void)
         qkbd_state_free(sdl2_console[i].kbd);
         sdl2_window_destroy(&sdl2_console[i]);
     }
+    menu_scon = NULL;
     g_clear_pointer(&sdl2_console, g_free);
     sdl2_num_outputs = 0;
 
@@ -1029,6 +1297,9 @@ static void sdl2_display_init(DisplayState *ds, DisplayOptions *o)
         }
         sdl2_console[i].idx = i;
         sdl2_console[i].opts = o;
+        if (!menu_scon && qemu_console_is_graphic(con)) {
+            menu_scon = &sdl2_console[i];
+        }
 #ifdef CONFIG_OPENGL
         sdl2_console[i].opengl = display_opengl;
         sdl2_console[i].dgc.ops = display_opengl ? &gl_ctx_ops : NULL;

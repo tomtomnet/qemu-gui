@@ -172,6 +172,7 @@ if sdl.found()
   ))
   sdl_ss.add(when: opengl, if_true: files('sdl2-gl.c'))
   sdl_ss.add(when: x11, if_true: files('x_keymap.c'))
+  sdl_ss.add(when: imgui, if_true: [imgui, files('sdl2-gui.cpp', 'sdl2-gui-vm.c')])
   ui_modules += {'sdl' : sdl_ss}
 endif
 

@@ -1,0 +1,2 @@
+option('opengl', type : 'feature', value : 'auto',
+       description: 'OpenGL 3 renderer backend (uses libepoxy)')

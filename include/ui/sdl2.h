@@ -48,6 +48,10 @@ struct sdl2_console {
     SDL_GLContext winctx;
     QKbdState *kbd;
     bool has_dmabuf;
+    uint64_t frames;        /* guest frames shown */
+    bool menu_presented;    /* a frame was presented since the last refresh */
+    bool menu_stale;        /* the menu changed and is not on screen yet */
+    int menu_top;           /* window rows taken by the docked menu bar */
 #ifdef CONFIG_OPENGL
     QemuGLShader *gls;
     egl_fb guest_fb;
@@ -60,6 +64,14 @@ struct sdl2_console {
 void sdl2_window_create(struct sdl2_console *scon);
 void sdl2_window_destroy(struct sdl2_console *scon);
 void sdl2_window_resize(struct sdl2_console *scon);
+/* Draw the control menu, if any, right before presenting the window */
+void sdl2_draw_menu(struct sdl2_console *scon);
+
+/* Rows of a window @h rows high that show the guest, below the menu bar */
+static inline int sdl2_guest_height(struct sdl2_console *scon, int h)
+{
+    return MAX(h - scon->menu_top, 1);
+}
 void sdl2_poll_events(struct sdl2_console *scon);
 
 void sdl2_process_key(struct sdl2_console *scon,

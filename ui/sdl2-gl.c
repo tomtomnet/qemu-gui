@@ -55,9 +55,11 @@ static void sdl2_gl_render_surface(struct sdl2_console *scon)
     SDL_GL_MakeCurrent(scon->real_window, scon->winctx);
 
     SDL_GetWindowSize(scon->real_window, &ww, &wh);
-    surface_gl_setup_viewport(scon->gls, scon->surface, ww, wh);
+    surface_gl_setup_viewport(scon->gls, scon->surface, ww,
+                              sdl2_guest_height(scon, wh));
 
     surface_gl_render_texture(scon->gls, scon->surface);
+    sdl2_draw_menu(scon);
     SDL_GL_SwapWindow(scon->real_window);
 }
 
@@ -118,9 +120,32 @@ void sdl2_gl_refresh(DisplayChangeListener *dcl)
     qemu_console_hw_update(dcl->con);
     if (scon->updates && scon->real_window) {
         scon->updates = 0;
+        scon->frames++;
         sdl2_gl_render_surface(scon);
     }
     sdl2_poll_events(scon);
+}
+
+static void sdl2_gl_scanout_present(struct sdl2_console *scon)
+{
+    int ww, wh;
+
+    if (!scon->scanout_mode) {
+        return;
+    }
+    if (!scon->guest_fb.framebuffer) {
+        return;
+    }
+
+    SDL_GL_MakeCurrent(scon->real_window, scon->winctx);
+
+    SDL_GetWindowSize(scon->real_window, &ww, &wh);
+    /* the bottom rows of the window, below the docked menu bar */
+    egl_fb_setup_default(&scon->win_fb, ww, sdl2_guest_height(scon, wh), 0, 0);
+    egl_fb_blit(&scon->win_fb, &scon->guest_fb, !scon->y0_top);
+
+    sdl2_draw_menu(scon);
+    SDL_GL_SwapWindow(scon->real_window);
 }
 
 void sdl2_gl_redraw(struct sdl2_console *scon)
@@ -128,9 +153,8 @@ void sdl2_gl_redraw(struct sdl2_console *scon)
     assert(scon->opengl);
 
     if (scon->scanout_mode) {
-        /* sdl2_gl_scanout_flush actually only care about
-         * the first argument. */
-        return sdl2_gl_scanout_flush(&scon->dcl, 0, 0, 0, 0);
+        sdl2_gl_scanout_present(scon);
+        return;
     }
     if (scon->surface) {
         sdl2_gl_render_surface(scon);
@@ -235,23 +259,12 @@ void sdl2_gl_scanout_flush(DisplayChangeListener *dcl,
                            uint32_t x, uint32_t y, uint32_t w, uint32_t h)
 {
     struct sdl2_console *scon = container_of(dcl, struct sdl2_console, dcl);
-    int ww, wh;
 
     assert(scon->opengl);
-    if (!scon->scanout_mode) {
-        return;
+    if (scon->scanout_mode && scon->guest_fb.framebuffer) {
+        scon->frames++;
     }
-    if (!scon->guest_fb.framebuffer) {
-        return;
-    }
-
-    SDL_GL_MakeCurrent(scon->real_window, scon->winctx);
-
-    SDL_GetWindowSize(scon->real_window, &ww, &wh);
-    egl_fb_setup_default(&scon->win_fb, ww, wh, 0, 0);
-    egl_fb_blit(&scon->win_fb, &scon->guest_fb, !scon->y0_top);
-
-    SDL_GL_SwapWindow(scon->real_window);
+    sdl2_gl_scanout_present(scon);
 }
 
 #ifdef CONFIG_GBM

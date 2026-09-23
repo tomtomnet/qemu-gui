@@ -28,14 +28,11 @@
 #include "ui/input.h"
 #include "ui/sdl2.h"
 
-void sdl2_2d_update(DisplayChangeListener *dcl,
-                    int x, int y, int w, int h)
+static void sdl2_2d_draw(struct sdl2_console *scon, int x, int y, int w, int h)
 {
-    struct sdl2_console *scon = container_of(dcl, struct sdl2_console, dcl);
     DisplaySurface *surf = scon->surface;
     SDL_Rect rect;
     size_t surface_data_offset;
-    assert(!scon->opengl);
 
     if (!scon->texture) {
         return;
@@ -53,7 +50,18 @@ void sdl2_2d_update(DisplayChangeListener *dcl,
                       surface_stride(surf));
     SDL_RenderClear(scon->real_renderer);
     SDL_RenderCopy(scon->real_renderer, scon->texture, NULL, NULL);
+    sdl2_draw_menu(scon);
     SDL_RenderPresent(scon->real_renderer);
+}
+
+void sdl2_2d_update(DisplayChangeListener *dcl,
+                    int x, int y, int w, int h)
+{
+    struct sdl2_console *scon = container_of(dcl, struct sdl2_console, dcl);
+
+    assert(!scon->opengl);
+    scon->frames++;
+    sdl2_2d_draw(scon, x, y, w, h);
 }
 
 void sdl2_2d_switch(DisplayChangeListener *dcl,
@@ -140,9 +148,9 @@ void sdl2_2d_redraw(struct sdl2_console *scon)
     if (!scon->surface) {
         return;
     }
-    sdl2_2d_update(&scon->dcl, 0, 0,
-                   surface_width(scon->surface),
-                   surface_height(scon->surface));
+    sdl2_2d_draw(scon, 0, 0,
+                 surface_width(scon->surface),
+                 surface_height(scon->surface));
 }
 
 bool sdl2_2d_check_format(DisplayChangeListener *dcl,

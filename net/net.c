@@ -826,6 +826,15 @@ static ssize_t nc_sendv_compat(NetClientState *nc, const struct iovec *iov,
     return ret;
 }
 
+/* Bytes received and sent by the guest's NICs, for the UI */
+static uint64_t guest_rx_bytes, guest_tx_bytes;
+
+void qemu_net_guest_bytes(uint64_t *rx, uint64_t *tx)
+{
+    *rx = qatomic_read(&guest_rx_bytes);
+    *tx = qatomic_read(&guest_tx_bytes);
+}
+
 static ssize_t qemu_deliver_packet_iov(NetClientState *sender,
                                        unsigned flags,
                                        const struct iovec *iov,
@@ -834,6 +843,7 @@ static ssize_t qemu_deliver_packet_iov(NetClientState *sender,
 {
     MemReentrancyGuard *owned_reentrancy_guard;
     NetClientState *nc = opaque;
+    size_t size = iov_size(iov, iovcnt);
     int ret;
     struct virtio_net_hdr_v1_hash vnet_hdr = { };
     g_autofree struct iovec *iov_copy = NULL;
@@ -872,6 +882,15 @@ static ssize_t qemu_deliver_packet_iov(NetClientState *sender,
 
     if (owned_reentrancy_guard) {
         owned_reentrancy_guard->engaged_in_io = false;
+    }
+
+    /* not before delivery, a queued packet is delivered again later */
+    if (ret > 0) {
+        if (nc->info->type == NET_CLIENT_DRIVER_NIC) {
+            qatomic_add(&guest_rx_bytes, size);
+        } else if (sender && sender->info->type == NET_CLIENT_DRIVER_NIC) {
+            qatomic_add(&guest_tx_bytes, size);
+        }
     }
 
     if (ret == 0) {

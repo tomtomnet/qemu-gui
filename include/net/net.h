@@ -192,6 +192,8 @@ void *qemu_get_nic_opaque(NetClientState *nc);
 void qemu_del_net_client(NetClientState *nc);
 typedef void (*qemu_nic_foreach)(NICState *nic, void *opaque);
 void qemu_foreach_nic(qemu_nic_foreach func, void *opaque);
+/* Bytes received and sent by the guest's NICs so far (not with vhost-net) */
+void qemu_net_guest_bytes(uint64_t *rx, uint64_t *tx);
 int qemu_can_receive_packet(NetClientState *nc);
 int qemu_can_send_packet(NetClientState *nc);
 ssize_t qemu_sendv_packet(NetClientState *nc, const struct iovec *iov,

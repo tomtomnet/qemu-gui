@@ -82,7 +82,8 @@ python = import('python').find_installation()
 
 cc = meson.get_compiler('c')
 all_languages = ['c']
-enable_cpp = host_os == 'windows' or get_option('plugins')
+enable_cpp = host_os == 'windows' or get_option('plugins') or \
+             not get_option('sdl_gui').disabled()
 if enable_cpp and add_languages('cpp', required: false, native: false)
   all_languages += ['cpp']
   cxx = meson.get_compiler('cpp')
@@ -1787,6 +1788,28 @@ if (have_system or have_tools) and (virgl.found() or opengl.found())
 endif
 have_vhost_user_gpu = have_vhost_user_gpu and virgl.found() and opengl.found() and gbm.found()
 
+# The in-window menu of the SDL display is drawn with Dear ImGui (C++)
+imgui = not_found
+if sdl.found() and not get_option('sdl_gui').disabled()
+  if host_os != 'linux'
+    # the VM side reads /proc and sysfs and asks polkit for USB access
+    if get_option('sdl_gui').enabled()
+      error('sdl-gui is only supported on Linux hosts')
+    endif
+  elif 'cpp' in all_languages
+    imgui_proj = subproject('imgui', required: get_option('sdl_gui'),
+                            default_options: ['werror=false',
+                                              'opengl=' + (opengl.found() ? 'enabled' : 'disabled')])
+    if imgui_proj.found()
+      imgui = imgui_proj.get_variable('imgui_dep')
+    endif
+  elif get_option('sdl_gui').enabled()
+    error('sdl-gui requires a C++ compiler')
+  endif
+elif get_option('sdl_gui').enabled()
+  error('sdl-gui requires SDL')
+endif
+
 libcbor = not_found
 if not get_option('libcbor').auto() or have_system
   libcbor = dependency('libcbor', version: '>=0.7.0',
@@ -2489,6 +2512,7 @@ config_host_data.set('CONFIG_RELOCATABLE', get_option('relocatable'))
 config_host_data.set('CONFIG_SAFESTACK', get_option('safe_stack'))
 config_host_data.set('CONFIG_SDL', sdl.found())
 config_host_data.set('CONFIG_SDL_IMAGE', sdl_image.found())
+config_host_data.set('CONFIG_SDL_GUI', imgui.found())
 config_host_data.set('CONFIG_SECCOMP', seccomp.found())
 if seccomp.found()
   config_host_data.set('CONFIG_SECCOMP_SYSRAWRC', seccomp_has_sysrawrc)
@@ -4895,6 +4919,7 @@ endif
 summary_info += {'D-Bus display':     dbus_display}
 summary_info += {'SDL support':       sdl}
 summary_info += {'SDL image support': sdl_image}
+summary_info += {'SDL control menu':  imgui}
 summary_info += {'GTK support':       gtk}
 summary_info += {'pixman':            pixman}
 summary_info += {'VTE support':       vte}
