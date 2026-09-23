@@ -1,0 +1,121 @@
+#!/usr/bin/env python3
+#
+# vdagent-clipboard-bridge: share the clipboard of a Wayland session in a
+# guest with spice-vdagent, which only knows the X11 (XWayland) clipboard
+#
+# QEMU's qemu-vdagent and spice-vdagent in the guest exchange the clipboard
+# through the X11 CLIPBOARD selection.  Not every compositor keeps it in
+# sync with the Wayland clipboard for a client without a window, like
+# spice-vdagent: KWin passes X11 copies on to Wayland but not the other way
+# around, Hyprland and niri (xwayland-satellite) pass on neither.  This
+# copies text between the two, in both directions, when they differ.
+# GNOME does it all by itself and needs none of this.
+#
+# Needs wl-clipboard, whose watch mode needs a compositor with the
+# data-control protocol (KWin, Hyprland, niri, wlroots compositors), and
+# xclip.  Run it in the session, next to spice-vdagent.
+#
+# SPDX-License-Identifier: GPL-2.0-or-later
+
+import ctypes
+import ctypes.util
+import os
+import subprocess
+import sys
+import threading
+
+TEXT = "text/plain;charset=utf-8"
+
+
+def x11_text():
+    try:
+        r = subprocess.run(["xclip", "-o", "-selection", "clipboard",
+                            "-t", "UTF8_STRING"],
+                           capture_output=True, timeout=5)
+    except subprocess.TimeoutExpired:
+        return None
+    return r.stdout if r.returncode == 0 else None
+
+
+def wayland_text():
+    try:
+        r = subprocess.run(["wl-paste", "--no-newline", "--type", TEXT],
+                           capture_output=True, timeout=5)
+    except subprocess.TimeoutExpired:
+        return None
+    return r.stdout if r.returncode == 0 else None
+
+
+def to_x11(text):
+    """Called by wl-paste for each Wayland copy, with its text"""
+    if text and text != x11_text():
+        # xclip stays in the background to serve the selection
+        subprocess.run(["xclip", "-i", "-selection", "clipboard",
+                        "-t", "UTF8_STRING"], input=text,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def to_wayland():
+    """An X11 client, e.g. spice-vdagent, copied"""
+    text = x11_text()
+    if text and text != wayland_text():
+        # wl-copy stays in the background to serve the selection
+        subprocess.run(["wl-copy", "--type", TEXT], input=text,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def watch_x11():
+    """Call to_wayland() whenever the X11 CLIPBOARD selection changes owner"""
+    xlib = ctypes.CDLL(ctypes.util.find_library("X11"))
+    xfixes = ctypes.CDLL(ctypes.util.find_library("Xfixes"))
+    xlib.XOpenDisplay.restype = ctypes.c_void_p
+    xlib.XOpenDisplay.argtypes = [ctypes.c_char_p]
+    xlib.XInternAtom.restype = ctypes.c_ulong
+    xlib.XInternAtom.argtypes = [ctypes.c_void_p, ctypes.c_char_p,
+                                 ctypes.c_int]
+    xlib.XDefaultRootWindow.restype = ctypes.c_ulong
+    xlib.XDefaultRootWindow.argtypes = [ctypes.c_void_p]
+    xlib.XNextEvent.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    xfixes.XFixesQueryExtension.argtypes = [ctypes.c_void_p,
+                                            ctypes.POINTER(ctypes.c_int),
+                                            ctypes.POINTER(ctypes.c_int)]
+    xfixes.XFixesSelectSelectionInput.argtypes = [ctypes.c_void_p,
+                                                  ctypes.c_ulong,
+                                                  ctypes.c_ulong,
+                                                  ctypes.c_ulong]
+
+    dpy = xlib.XOpenDisplay(None)
+    event_base, error_base = ctypes.c_int(), ctypes.c_int()
+    if not dpy or not xfixes.XFixesQueryExtension(dpy, event_base,
+                                                  error_base):
+        sys.exit("vdagent-clipboard-bridge: no X11 display with XFixes")
+    clipboard = xlib.XInternAtom(dpy, b"CLIPBOARD", 0)
+    xfixes.XFixesSelectSelectionInput(dpy, xlib.XDefaultRootWindow(dpy),
+                                      clipboard, 1)  # SetSelectionOwner
+    event = ctypes.create_string_buffer(192)        # sizeof(XEvent)
+    while True:
+        xlib.XNextEvent(dpy, event)
+        if int.from_bytes(event.raw[:4], sys.byteorder) == event_base.value:
+            to_wayland()
+
+
+def main():
+    if sys.argv[1:] == ["--to-x11"]:
+        to_x11(sys.stdin.buffer.read())
+        return
+    if not os.environ.get("WAYLAND_DISPLAY") or not os.environ.get("DISPLAY"):
+        sys.exit("vdagent-clipboard-bridge: needs a Wayland session with "
+                 "XWayland (WAYLAND_DISPLAY and DISPLAY)")
+
+    threading.Thread(target=watch_x11, daemon=True).start()
+    # wl-paste runs this again, with --to-x11, for each Wayland copy
+    watch = subprocess.run(["wl-paste", "--type", TEXT, "--watch",
+                            sys.executable, os.path.abspath(__file__),
+                            "--to-x11"])
+    sys.exit("vdagent-clipboard-bridge: wl-paste --watch failed; the "
+             "compositor needs the data-control protocol (GNOME has none, "
+             "but does not need this)" if watch.returncode else 0)
+
+
+if __name__ == "__main__":
+    main()

@@ -6,7 +6,7 @@ passthrough, usage statistics and VM information, without giving up the fast
 SDL + OpenGL display. It also makes the SDL display follow the host monitor's
 refresh rate.
 
-This is a fork of [QEMU](https://www.qemu.org): upstream master plus two
+This is a fork of [QEMU](https://www.qemu.org): upstream master plus a few
 commits. The menu needs a Linux host.
 
 ## What's added
@@ -25,6 +25,8 @@ commits. The menu needs a Linux host.
   - **View:** fullscreen, menu bar, statistics, menu size.
   - **Statistics:** CPU, GPU, disk and network use and the frame rate, on the
     right of the menu bar.
+- **ui/sdl2: share the clipboard with the guest**: copy and paste text
+  between the host and the guest, see [Clipboard sharing](#clipboard-sharing).
 
 ## Build on Fedora
 
@@ -110,10 +112,55 @@ For x86-64 VMs you can skip most of it:
 - The menu settings are in `~/.config/qemu/sdl-gui.ini`.
 - To build without the menu, configure with `--disable-sdl-gui`.
 
+## Clipboard sharing
+
+Text copied on the host can be pasted in the guest, and the other way
+around. QEMU's vdagent talks to spice-vdagent in the guest. On the host side
+it works with any desktop; I tested it with KDE Plasma, Hyprland and niri.
+
+1. Give the VM a vdagent channel:
+
+       -device virtio-serial-pci \
+       -chardev qemu-vdagent,id=vdagent,name=vdagent,clipboard=on,mouse=off \
+       -device virtserialport,chardev=vdagent,name=com.redhat.spice.0
+
+2. In the guest, install spice-vdagent: `sudo dnf install spice-vdagent`.
+   GNOME and KDE Plasma start it on their own.
+3. Wayland guests other than GNOME also need the clipboard bridge.
+   spice-vdagent only sees the X11 (XWayland) clipboard: KDE Plasma passes
+   only host-to-guest copies on to Wayland apps, and Hyprland and niri pass on
+   neither direction. The bridge copies text between the two clipboards:
+
+       sudo dnf install wl-clipboard xclip
+       sudo install -m 755 contrib/vdagent-clipboard-bridge/vdagent-clipboard-bridge /usr/local/bin/
+
+   Then start it with the session:
+   - **KDE Plasma:**
+     `cp contrib/vdagent-clipboard-bridge/vdagent-clipboard-bridge.desktop ~/.config/autostart/`
+   - **Hyprland:** start both `spice-vdagent` and the bridge, e.g.
+     `exec-once = spice-vdagent` and
+     `exec-once = /usr/local/bin/vdagent-clipboard-bridge` (or the equivalent
+     in a Lua config).
+   - **niri:** `spawn-at-startup "spice-vdagent"` and
+     `spawn-at-startup "/usr/local/bin/vdagent-clipboard-bridge"` in
+     `config.kdl`, with `xwayland-satellite` installed for XWayland.
+
+Good to know:
+- Only text is shared.
+- **Guest to host, on a Wayland host:** the text reaches the host clipboard at
+  your next key press or click in the VM window, since Wayland lets a window
+  set the clipboard only in response to input. Copying with Ctrl+C or a click
+  in the guest already counts.
+- **Host to guest, on a Wayland host:** a host copy is offered to the guest
+  once the VM window has the focus, since Wayland only shows the clipboard to
+  that window.
+- **Debugging:** `-trace 'sdl2_clipboard*'` shows what the display does with the
+  clipboard, and `-trace 'vdagent*'` shows the traffic with the guest.
+
 ## Notes
 
-- The menu code was written with an AI assistant (Claude). QEMU doesn't
-  accept AI-generated contributions
+- The menu, the clipboard sharing and the clipboard bridge were written with
+  an AI assistant (Claude). QEMU doesn't accept AI-generated contributions
   ([docs/devel/code-provenance.rst](../docs/devel/code-provenance.rst)), so
   these changes are not meant for upstream QEMU.
 - License: GPL-2.0-or-later, like QEMU (see [COPYING](../COPYING)). Dear ImGui
