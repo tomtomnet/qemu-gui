@@ -1256,7 +1256,13 @@ static void info_window(Uint64 now)
 
 static void menu_bar()
 {
-    if (!ImGui::BeginMainMenuBar()) {
+    bool open;
+
+    /* a bar across the top of the window, not a window framed in grey */
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    open = ImGui::BeginMainMenuBar();
+    ImGui::PopStyleVar();
+    if (!open) {
         return;
     }
     gui.bar_height = ImGui::GetWindowHeight();
