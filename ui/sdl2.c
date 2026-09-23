@@ -59,8 +59,68 @@ static SDL_Cursor *guest_sprite;
 static Notifier mouse_mode_notifier;
 
 #define SDL2_REFRESH_INTERVAL_BUSY 10
-#define SDL2_MAX_IDLE_COUNT (2 * GUI_REFRESH_INTERVAL_DEFAULT \
-                             / SDL2_REFRESH_INTERVAL_BUSY + 1)
+/* how long the busy refresh interval is kept after the last input event */
+#define SDL2_BUSY_TIMEOUT (2 * GUI_REFRESH_INTERVAL_DEFAULT)
+
+/*
+ * In absolute mode the grab is released when the pointer reaches the window
+ * border so that it can leave the window.  The exact border coordinate is not
+ * always reported (for example with fractional scaling), so a thin band along
+ * the border counts as the border, and the grab is only taken again once the
+ * pointer is clearly inside the window.
+ */
+#define SDL2_GRAB_RELEASE_BORDER 3
+#define SDL2_GRAB_ACQUIRE_BORDER (2 * SDL2_GRAB_RELEASE_BORDER)
+
+static bool sdl2_pointer_inside(int x, int y, int w, int h, int border)
+{
+    return x >= border && y >= border && x < w - border && y < h - border;
+}
+
+/*
+ * Follow the refresh rate of the host display showing the window, like the
+ * GTK backend: report it to the guest through the UI info (EDID) and poll
+ * input at that rate while the guest is being used.
+ */
+static void sdl2_update_refresh_rate(struct sdl2_console *scon)
+{
+    SDL_DisplayMode mode;
+    int display = SDL_GetWindowDisplayIndex(scon->real_window);
+    uint32_t refresh_rate = 0;
+    QemuUIInfo info;
+
+    if (display >= 0 && SDL_GetCurrentDisplayMode(display, &mode) == 0 &&
+        mode.refresh_rate > 0) {
+        refresh_rate = mode.refresh_rate * 1000;
+    }
+
+    scon->busy_interval = SDL2_REFRESH_INTERVAL_BUSY;
+    if (refresh_rate) {
+        int interval = 1000 * 1000 / refresh_rate;
+
+        scon->busy_interval = MAX(1, MIN(interval, SDL2_REFRESH_INTERVAL_BUSY));
+    }
+
+    if (refresh_rate == scon->refresh_rate) {
+        return;
+    }
+    scon->refresh_rate = refresh_rate;
+
+    if (!qemu_console_ui_info_supported(scon->dcl.con)) {
+        return;
+    }
+
+    info = *qemu_console_get_ui_info(scon->dcl.con);
+    if (!info.width || !info.height) {
+        int w, h;
+
+        SDL_GetWindowSize(scon->real_window, &w, &h);
+        info.width = w;
+        info.height = h;
+    }
+    info.refresh_rate = refresh_rate;
+    qemu_console_set_ui_info(scon->dcl.con, &info, true);
+}
 
 /* introduced in SDL 2.0.10 */
 #ifndef SDL_HINT_RENDER_BATCHING
@@ -108,6 +168,7 @@ void sdl2_window_create(struct sdl2_console *scon)
                                          surface_width(scon->surface),
                                          surface_height(scon->surface),
                                          flags);
+    sdl2_update_refresh_rate(scon);
     if (scon->opengl) {
         const char *driver = "opengl";
 
@@ -290,8 +351,8 @@ static void absolute_mouse_grab(struct sdl2_console *scon)
     int scr_w, scr_h;
     SDL_GetMouseState(&mouse_x, &mouse_y);
     SDL_GetWindowSize(scon->real_window, &scr_w, &scr_h);
-    if (mouse_x > 0 && mouse_x < scr_w - 1 &&
-        mouse_y > 0 && mouse_y < scr_h - 1) {
+    if (sdl2_pointer_inside(mouse_x, mouse_y, scr_w, scr_h,
+                            SDL2_GRAB_ACQUIRE_BORDER)) {
         sdl_grab_start(scon);
     }
 }
@@ -497,7 +558,6 @@ static void handle_textinput(SDL_Event *ev)
 
 static void handle_mousemotion(SDL_Event *ev)
 {
-    int max_x, max_y;
     struct sdl2_console *scon = get_scon_from_window(ev->motion.windowID);
     int scr_w, scr_h, surf_w, surf_h, x, y, dx, dy;
 
@@ -507,16 +567,13 @@ static void handle_mousemotion(SDL_Event *ev)
 
     SDL_GetWindowSize(scon->real_window, &scr_w, &scr_h);
     if (qemu_input_is_absolute(scon->dcl.con) || absolute_enabled) {
-        max_x = scr_w - 1;
-        max_y = scr_h - 1;
-        if (gui_grab && !gui_fullscreen
-            && (ev->motion.x == 0 || ev->motion.y == 0 ||
-                ev->motion.x == max_x || ev->motion.y == max_y)) {
+        if (gui_grab && !gui_fullscreen &&
+            !sdl2_pointer_inside(ev->motion.x, ev->motion.y, scr_w, scr_h,
+                                 SDL2_GRAB_RELEASE_BORDER)) {
             sdl_grab_end(scon);
-        }
-        if (!gui_grab &&
-            (ev->motion.x > 0 && ev->motion.x < max_x &&
-             ev->motion.y > 0 && ev->motion.y < max_y)) {
+        } else if (!gui_grab &&
+                   sdl2_pointer_inside(ev->motion.x, ev->motion.y, scr_w, scr_h,
+                                       SDL2_GRAB_ACQUIRE_BORDER)) {
             sdl_grab_start(scon);
         }
     }
@@ -605,10 +662,17 @@ static void handle_windowevent(SDL_Event *ev)
             QemuUIInfo info = {
                 .width = ev->window.data1,
                 .height = ev->window.data2,
+                .refresh_rate = scon->refresh_rate,
             };
             qemu_console_set_ui_info(scon->dcl.con, &info, true);
         }
         sdl2_redraw(scon);
+        break;
+    case SDL_WINDOWEVENT_MOVED:
+#if SDL_VERSION_ATLEAST(2, 0, 18)
+    case SDL_WINDOWEVENT_DISPLAY_CHANGED:
+#endif
+        sdl2_update_refresh_rate(scon);
         break;
     case SDL_WINDOWEVENT_EXPOSED:
         sdl2_redraw(scon);
@@ -667,6 +731,7 @@ void sdl2_poll_events(struct sdl2_console *scon)
     SDL_Event ev1, *ev = &ev1;
     bool allow_close = true;
     int idle = 1;
+    int busy_interval, max_idle_count;
 
     if (scon->last_vm_running != runstate_is_running()) {
         scon->last_vm_running = runstate_is_running();
@@ -717,16 +782,19 @@ void sdl2_poll_events(struct sdl2_console *scon)
         }
     }
 
+    busy_interval = scon->busy_interval ? scon->busy_interval :
+                                          SDL2_REFRESH_INTERVAL_BUSY;
+    max_idle_count = SDL2_BUSY_TIMEOUT / busy_interval + 1;
     if (idle) {
-        if (scon->idle_counter < SDL2_MAX_IDLE_COUNT) {
+        if (scon->idle_counter < max_idle_count) {
             scon->idle_counter++;
-            if (scon->idle_counter >= SDL2_MAX_IDLE_COUNT) {
+            if (scon->idle_counter >= max_idle_count) {
                 scon->dcl.update_interval = GUI_REFRESH_INTERVAL_DEFAULT;
             }
         }
     } else {
         scon->idle_counter = 0;
-        scon->dcl.update_interval = SDL2_REFRESH_INTERVAL_BUSY;
+        scon->dcl.update_interval = busy_interval;
     }
 }
 

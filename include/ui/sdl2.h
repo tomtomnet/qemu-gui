@@ -41,6 +41,8 @@ struct sdl2_console {
     int opengl;
     int updates;
     int idle_counter;
+    int busy_interval;      /* refresh interval while busy, in ms */
+    uint32_t refresh_rate;  /* host display refresh rate, in mHz */
     int ignore_hotkeys;
     bool gui_keysym;
     SDL_GLContext winctx;
