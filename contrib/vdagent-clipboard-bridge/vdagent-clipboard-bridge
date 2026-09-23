@@ -23,6 +23,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 
 TEXT = "text/plain;charset=utf-8"
 
@@ -64,8 +65,8 @@ def to_wayland():
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
-def watch_x11():
-    """Call to_wayland() whenever the X11 CLIPBOARD selection changes owner"""
+def open_x11():
+    """Connect to the X11 display, waiting for XWayland if it is not up yet"""
     xlib = ctypes.CDLL(ctypes.util.find_library("X11"))
     xfixes = ctypes.CDLL(ctypes.util.find_library("Xfixes"))
     xlib.XOpenDisplay.restype = ctypes.c_void_p
@@ -85,17 +86,24 @@ def watch_x11():
                                                   ctypes.c_ulong]
 
     dpy = xlib.XOpenDisplay(None)
+    while not dpy:
+        time.sleep(1)
+        dpy = xlib.XOpenDisplay(None)
     event_base, error_base = ctypes.c_int(), ctypes.c_int()
-    if not dpy or not xfixes.XFixesQueryExtension(dpy, event_base,
-                                                  error_base):
-        sys.exit("vdagent-clipboard-bridge: no X11 display with XFixes")
+    if not xfixes.XFixesQueryExtension(dpy, event_base, error_base):
+        sys.exit("vdagent-clipboard-bridge: the X11 display has no XFixes")
+    return xlib, xfixes, dpy, event_base.value
+
+
+def watch_x11(xlib, xfixes, dpy, event_base):
+    """Call to_wayland() whenever the X11 CLIPBOARD selection changes owner"""
     clipboard = xlib.XInternAtom(dpy, b"CLIPBOARD", 0)
     xfixes.XFixesSelectSelectionInput(dpy, xlib.XDefaultRootWindow(dpy),
                                       clipboard, 1)  # SetSelectionOwner
     event = ctypes.create_string_buffer(192)        # sizeof(XEvent)
     while True:
         xlib.XNextEvent(dpy, event)
-        if int.from_bytes(event.raw[:4], sys.byteorder) == event_base.value:
+        if int.from_bytes(event.raw[:4], sys.byteorder) == event_base:
             to_wayland()
 
 
@@ -107,14 +115,15 @@ def main():
         sys.exit("vdagent-clipboard-bridge: needs a Wayland session with "
                  "XWayland (WAYLAND_DISPLAY and DISPLAY)")
 
-    threading.Thread(target=watch_x11, daemon=True).start()
+    threading.Thread(target=watch_x11, args=open_x11(), daemon=True).start()
     # wl-paste runs this again, with --to-x11, for each Wayland copy
     watch = subprocess.run(["wl-paste", "--type", TEXT, "--watch",
                             sys.executable, os.path.abspath(__file__),
                             "--to-x11"])
-    sys.exit("vdagent-clipboard-bridge: wl-paste --watch failed; the "
-             "compositor needs the data-control protocol (GNOME has none, "
-             "but does not need this)" if watch.returncode else 0)
+    if watch.returncode:
+        sys.exit("vdagent-clipboard-bridge: wl-paste --watch stopped "
+                 "(GNOME, which has no data-control protocol, does not "
+                 "need this bridge)")
 
 
 if __name__ == "__main__":

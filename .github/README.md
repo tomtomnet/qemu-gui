@@ -135,15 +135,25 @@ it works with any desktop; I tested it with KDE Plasma, Hyprland and niri.
        sudo install -m 755 contrib/vdagent-clipboard-bridge/vdagent-clipboard-bridge /usr/local/bin/
 
    Then start it with the session:
-   - **KDE Plasma:**
-     `cp contrib/vdagent-clipboard-bridge/vdagent-clipboard-bridge.desktop ~/.config/autostart/`
-   - **Hyprland:** start both `spice-vdagent` and the bridge, e.g.
-     `exec-once = spice-vdagent` and
-     `exec-once = /usr/local/bin/vdagent-clipboard-bridge` (or the equivalent
-     in a Lua config).
-   - **niri:** `spawn-at-startup "spice-vdagent"` and
-     `spawn-at-startup "/usr/local/bin/vdagent-clipboard-bridge"` in
-     `config.kdl`, with `xwayland-satellite` installed for XWayland.
+   - **KDE Plasma, niri and other desktops that run autostart entries**
+     (niri does when started as `niri-session`, the usual way):
+
+         cp contrib/vdagent-clipboard-bridge/vdagent-clipboard-bridge.desktop ~/.config/autostart/
+
+     spice-vdagent starts through its own autostart entry. niri also needs
+     `xwayland-satellite` installed for XWayland.
+   - **Hyprland** runs no autostart entries, so start both spice-vdagent and
+     the bridge in its config. With a Lua config (`hyprland.lua`):
+
+         hl.on("hyprland.start", function ()
+             hl.exec_cmd("spice-vdagent")
+             hl.exec_cmd("/usr/local/bin/vdagent-clipboard-bridge")
+         end)
+
+     With a `hyprland.conf`:
+
+         exec-once = spice-vdagent
+         exec-once = /usr/local/bin/vdagent-clipboard-bridge
 
 Good to know:
 - Only text is shared.
