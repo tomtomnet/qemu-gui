@@ -90,7 +90,6 @@ static void virtio_gpu_gl_handle_ctrl(VirtIODevice *vdev, VirtQueue *vq)
 
 static void virtio_gpu_gl_reset(VirtIODevice *vdev)
 {
-    VirtIOGPU *g = VIRTIO_GPU(vdev);
     VirtIOGPUGL *gl = VIRTIO_GPU_GL(vdev);
 
     virtio_gpu_reset(vdev);
@@ -98,10 +97,12 @@ static void virtio_gpu_gl_reset(VirtIODevice *vdev)
 
     /*
      * GL functions must be called with the associated GL context in main
-     * thread, and when the renderer is unblocked.
+     * thread, and when the renderer is unblocked. Disabling the scanouts is
+     * GL work too: the displays make a texture for the placeholder surface.
+     * A guest reset runs here in a vCPU thread, so virtio_gpu_virgl_reset()
+     * disables them, in the main thread, before the next command.
      */
     if (gl->renderer_state == RS_INITED) {
-        virtio_gpu_virgl_reset_scanout(g);
         gl->renderer_state = RS_RESET;
     }
 }

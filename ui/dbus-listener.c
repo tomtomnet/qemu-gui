@@ -618,7 +618,11 @@ static void dbus_scanout_texture(DisplayChangeListener *dcl,
     uint32_t offset[DMABUF_MAX_PLANES], stride[DMABUF_MAX_PLANES], fourcc;
     uint64_t modifier;
 
-    assert(tex_id);
+    if (!tex_id) {
+        /* e.g. a placeholder surface made where no GL context was current */
+        dbus_scanout_disable(dcl);
+        return;
+    }
     if (!egl_dmabuf_export_texture(tex_id, fd, (EGLint *)offset, (EGLint *)stride,
                                    (EGLint *)&fourcc, &num_planes, &modifier)) {
         error_report("%s: failed to export dmabuf for texture", __func__);

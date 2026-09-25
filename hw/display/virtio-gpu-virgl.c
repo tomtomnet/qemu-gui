@@ -1460,6 +1460,9 @@ static bool virtio_gpu_virgl_reset(VirtIOGPU *g)
     VirtIOGPUGL *gl = VIRTIO_GPU_GL(g);
     struct virtio_gpu_simple_resource *res, *tmp;
 
+    /* deferred from virtio_gpu_gl_reset(), which may run in a vCPU thread */
+    virtio_gpu_virgl_reset_scanout(g);
+
     /*
      * Virgl blob resource unmapping can be suspended and
      * deferred on unref, ensure that destruction is completed.

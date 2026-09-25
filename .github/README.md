@@ -35,6 +35,12 @@ commits. The menu needs a Linux host.
   booted. A guest offered native context that only creates virgl contexts
   has a Mesa without native context support for the GPU.
   [qemu-gui-manager](https://github.com/tomtomnet/qemu-gui-manager) shows it.
+- **virtio-gpu-gl: disable the scanouts on reset in the main thread**: a
+  fix. A guest reset of `virtio-gpu-gl` ran display work in a vCPU thread,
+  and with `-display dbus,gl=on` QEMU aborted there
+  (`dbus_scanout_texture: Assertion 'tex_id' failed`). UEFI resets the GPU
+  when the bootloader hands over to the kernel, so VMs with `-vga none`
+  crashed at boot. Upstream has the same bug.
 
 ## Build on Fedora
 
