@@ -27,6 +27,14 @@ commits. The menu needs a Linux host.
     right of the menu bar.
 - **ui/sdl2: share the clipboard with the guest**: copy and paste text
   between the host and the guest, see [Clipboard sharing](#clipboard-sharing).
+- **hw/display/virtio-gpu-gl: tell whether the guest uses native context**:
+  read-only properties of the `virtio-vga-gl` and `virtio-gpu-gl` devices,
+  read with QMP `qom-get`. `x-drm-offered` says whether the guest is offered
+  DRM native context, and `x-drm-contexts`, `x-virgl-contexts` and
+  `x-venus-contexts` count the contexts of each kind it created since it
+  booted. A guest offered native context that only creates virgl contexts
+  has a Mesa without native context support for the GPU.
+  [qemu-gui-manager](https://github.com/tomtomnet/qemu-gui-manager) shows it.
 
 ## Build on Fedora
 

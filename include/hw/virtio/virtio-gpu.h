@@ -266,6 +266,12 @@ struct VirtIOGPUGL {
 
     MemoryRegion hostmem_background;
     void *hostmem_mmap;
+
+    /*
+     * The contexts the guest created since its last reset, by capset id:
+     * whether it draws through virgl, Venus or DRM native context.
+     */
+    uint32_t contexts_created[VIRTIO_GPU_CAPSET_DRM + 1];
 };
 
 struct VhostUserGPU {

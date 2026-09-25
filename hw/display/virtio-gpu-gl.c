@@ -17,6 +17,7 @@
 #include "qemu/module.h"
 #include "qemu/error-report.h"
 #include "qapi/error.h"
+#include "qapi/visitor.h"
 #include "system/system.h"
 #include "hw/virtio/virtio.h"
 #include "hw/virtio/virtio-gpu.h"
@@ -93,6 +94,7 @@ static void virtio_gpu_gl_reset(VirtIODevice *vdev)
     VirtIOGPUGL *gl = VIRTIO_GPU_GL(vdev);
 
     virtio_gpu_reset(vdev);
+    memset(gl->contexts_created, 0, sizeof(gl->contexts_created));
 
     /*
      * GL functions must be called with the associated GL context in main
@@ -209,6 +211,42 @@ static void virtio_gpu_gl_device_unrealize(DeviceState *qdev)
      */
 }
 
+/*
+ * Read-only, for management tools: whether the guest actually uses DRM
+ * native context, which needs Mesa built with it in the guest, or falls
+ * back to virgl.  The counts are of the contexts created since the guest
+ * reset the device, so since it booted.
+ */
+static void virtio_gpu_gl_get_contexts(Object *obj, Visitor *v,
+                                       const char *name, void *opaque,
+                                       Error **errp)
+{
+    VirtIOGPUGL *gl = VIRTIO_GPU_GL(obj);
+    uint32_t capset_id = GPOINTER_TO_UINT(opaque);
+    uint32_t count = gl->contexts_created[capset_id];
+
+    /* virgl, with or without context_init */
+    if (capset_id == VIRTIO_GPU_CAPSET_VIRGL) {
+        count += gl->contexts_created[VIRTIO_GPU_CAPSET_VIRGL2];
+    }
+    visit_type_uint32(v, name, &count, errp);
+}
+
+/* drm_native_context=on, and virglrenderer has a renderer for the host GPU */
+static bool virtio_gpu_gl_get_drm_offered(Object *obj, Error **errp)
+{
+    VirtIOGPU *g = VIRTIO_GPU(obj);
+
+    for (guint i = 0; g->capset_ids && i < g->capset_ids->len; i++) {
+        uint32_t capset_id = g_array_index(g->capset_ids, uint32_t, i);
+
+        if (capset_id == VIRTIO_GPU_CAPSET_DRM) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static void virtio_gpu_gl_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
@@ -226,6 +264,26 @@ static void virtio_gpu_gl_class_init(ObjectClass *klass, const void *data)
     vdc->unrealize = virtio_gpu_gl_device_unrealize;
     vdc->reset = virtio_gpu_gl_reset;
     device_class_set_props(dc, virtio_gpu_gl_properties);
+
+    object_class_property_add(klass, "x-virgl-contexts", "uint32",
+                              virtio_gpu_gl_get_contexts, NULL, NULL,
+                              GUINT_TO_POINTER(VIRTIO_GPU_CAPSET_VIRGL));
+    object_class_property_set_description(klass, "x-virgl-contexts",
+        "virgl contexts the guest created since it booted");
+    object_class_property_add(klass, "x-venus-contexts", "uint32",
+                              virtio_gpu_gl_get_contexts, NULL, NULL,
+                              GUINT_TO_POINTER(VIRTIO_GPU_CAPSET_VENUS));
+    object_class_property_set_description(klass, "x-venus-contexts",
+        "Venus contexts the guest created since it booted");
+    object_class_property_add(klass, "x-drm-contexts", "uint32",
+                              virtio_gpu_gl_get_contexts, NULL, NULL,
+                              GUINT_TO_POINTER(VIRTIO_GPU_CAPSET_DRM));
+    object_class_property_set_description(klass, "x-drm-contexts",
+        "DRM native contexts the guest created since it booted");
+    object_class_property_add_bool(klass, "x-drm-offered",
+                                   virtio_gpu_gl_get_drm_offered, NULL);
+    object_class_property_set_description(klass, "x-drm-offered",
+        "Whether the guest is offered DRM native context");
 }
 
 static const TypeInfo virtio_gpu_gl_info = {

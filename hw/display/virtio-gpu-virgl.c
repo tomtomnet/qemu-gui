@@ -498,6 +498,16 @@ void virtio_gpu_virgl_resource_destroy(VirtIOGPU *g,
     }
 }
 
+/* For the x-*-contexts properties: what the guest uses */
+static void virgl_count_context(VirtIOGPU *g, uint32_t capset_id)
+{
+    VirtIOGPUGL *gl = VIRTIO_GPU_GL(g);
+
+    if (capset_id < ARRAY_SIZE(gl->contexts_created)) {
+        gl->contexts_created[capset_id]++;
+    }
+}
+
 static void virgl_cmd_context_create(VirtIOGPU *g,
                                      struct virtio_gpu_ctrl_command *cmd)
 {
@@ -516,15 +526,21 @@ static void virgl_cmd_context_create(VirtIOGPU *g,
         }
 
 #if VIRGL_VERSION_MAJOR >= 1
-        virgl_renderer_context_create_with_flags(cc.hdr.ctx_id,
-                                                 cc.context_init,
-                                                 cc.nlen,
-                                                 cc.debug_name);
+        if (!virgl_renderer_context_create_with_flags(cc.hdr.ctx_id,
+                                                      cc.context_init,
+                                                      cc.nlen,
+                                                      cc.debug_name)) {
+            virgl_count_context(g, cc.context_init &
+                                   VIRTIO_GPU_CONTEXT_INIT_CAPSET_ID_MASK);
+        }
         return;
 #endif
     }
 
-    virgl_renderer_context_create(cc.hdr.ctx_id, cc.nlen, cc.debug_name);
+    if (!virgl_renderer_context_create(cc.hdr.ctx_id, cc.nlen,
+                                       cc.debug_name)) {
+        virgl_count_context(g, VIRTIO_GPU_CAPSET_VIRGL);
+    }
 }
 
 static void virgl_cmd_context_destroy(VirtIOGPU *g,
