@@ -9,6 +9,52 @@ refresh rate.
 This is a fork of [QEMU](https://www.qemu.org): upstream master plus a few
 commits. The menu needs a Linux host.
 
+## This branch: zero-copy (experimental)
+
+`zero-copy` is master plus one experiment, not for everyday use yet:
+**virtio-gpu/virgl: give guest-memory blobs a udmabuf for DRM native
+contexts**.
+
+- **What it does.** A guest compositor can hand the GPU a client's buffer in
+  the guest's own memory. KWin does it for `wl_shm` clients, such as most Qt
+  and GTK apps drawn by the CPU: it wraps the buffer in a udmabuf, and the
+  guest's Mesa imports that. The guest driver passes it to the host as a
+  guest-memory blob. A DRM native context can only use dma-bufs, so today it
+  rejects the blob ("invalid res_id") and the guest copies the pixels
+  instead. A full 4K buffer is about 30 MB per upload, about 3 ms on the GPU
+  it was measured on. With this branch, QEMU gives such a blob a host udmabuf
+  over the same guest pages, and the host GPU reads them directly.
+- **When anything is missing it copies, as master does.** QEMU only warns once
+  if the kernel refuses a udmabuf.
+- **Host needs:**
+  - DRM native context on the device (`drm_native_context=on`);
+  - guest RAM from `memory-backend-memfd` (`-object
+    memory-backend-memfd,id=mem,size=...,share=on -machine memory-backend=mem`),
+    which udmabuf requires;
+  - `/dev/udmabuf` usable by the user running QEMU (on Fedora desktops, the
+    logged-in user through the `uaccess` tag);
+  - udmabuf's limits: before Linux 7.3 a udmabuf may be 64 MB at most
+    (`udmabuf.size_limit_mb`), and a blob in more than 1024 pieces is refused
+    (`udmabuf.list_limit`);
+  - a virglrenderer with `virgl_renderer_resource_set_guest_dmabuf()`: the
+    patch in `contrib/qemu-gui/virglrenderer/`, which qemu-gui-manager's
+    File > Build QEMU applies for this branch.
+- **Guest needs:**
+  - a guest kernel whose virtio-gpu driver attaches imported dma-bufs to the
+    3D context. It is not upstream yet: "drm/virtio: attach imported dma-bufs
+    to the 3D context", a two-line change, identical to one in Val Packett's
+    pending `F_CREATE_GUEST_HANDLE` series. Without it the guest never offers
+    the buffer, and nothing changes;
+  - a compositor that imports `wl_shm` buffers through udmabuf: KWin 6.7 does.
+- **Risks, why it is a branch:**
+  - The pages of such buffers stay pinned while the host holds the udmabuf.
+  - The guest side depends on kernel behaviour upstream may change: a pending
+    revert of PRIME import with 3D, and a proposed udmabuf memlock limit, would
+    both turn it off silently (back to copies).
+  - The virglrenderer call is ours, not upstream's. Upstream is heading for a
+    guest-negotiated flag (`VIRTIO_GPU_F_CREATE_GUEST_HANDLE`) instead, which
+    would replace it.
+
 ## What's added
 
 - **ui/sdl2: follow the host refresh rate, tolerate grab border**

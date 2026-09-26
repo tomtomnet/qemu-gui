@@ -1,0 +1,82 @@
+Subject: [PATCH] virglrenderer: let the VMM attach a dma-buf to guest-memory blobs
+
+DRM native contexts only import resources that can be exported as a
+dma-buf.  Resources created with VIRGL_RENDERER_BLOB_MEM_GUEST only carry
+iovecs pointing at guest RAM, so native contexts ignore them in
+attach_resource() and every later use of the resource id fails with
+"invalid res_id".  This happens whenever a guest driver imports a dma-buf
+of another guest device, for example the udmabuf a Wayland compositor
+creates for a wl_shm client buffer.
+
+Add virgl_renderer_resource_set_guest_dmabuf() so that the VMM, which knows
+the memory backing guest RAM, can give such a resource a dma-buf aliasing
+its pages (a udmabuf).  The resource keeps its iovecs, and contexts that
+import dma-bufs in attach_resource() then work unchanged.
+
+Origin: the user's DRM native context work (drm-native-context/patches),
+carried by qemu-gui's zero-copy branch. The size of the iovecs is summed
+here rather than with vrend_get_iovec_size(), which virglrenderer main
+renamed virgl_get_iovec_size(), so that the patch builds on both.
+
+---
+diff --git a/src/virglrenderer.c b/src/virglrenderer.c
+index 746f3e6d..489619b6 100644
+--- a/src/virglrenderer.c
++++ b/src/virglrenderer.c
+@@ -1483,6 +1483,35 @@ virgl_renderer_resource_import_blob(const struct virgl_renderer_resource_import_
+    return 0;
+ }
+ 
++int
++virgl_renderer_resource_set_guest_dmabuf(uint32_t res_handle, int fd)
++{
++   TRACE_FUNC();
++   struct virgl_resource *res = virgl_resource_lookup(res_handle);
++
++   if (!res || fd < 0)
++      return -EINVAL;
++
++   /* Only guest-backed resources without host storage of their own. */
++   if (!res->iov_count || res->pipe_resource ||
++       res->fd_type != VIRGL_RESOURCE_FD_INVALID)
++      return -EINVAL;
++
++   size_t iov_size = 0;
++   for (int i = 0; i < res->iov_count; i++)
++      iov_size += res->iov[i].iov_len;
++
++   off_t size = lseek(fd, 0, SEEK_END);
++   if (size <= 0 || (size_t)size < iov_size)
++      return -EINVAL;
++
++   res->fd_type = VIRGL_RESOURCE_FD_DMABUF;
++   res->fd = fd;
++   res->map_size = size;
++
++   return 0;
++}
++
+ int
+ virgl_renderer_export_fence(uint64_t client_fence_id, int *fd)
+ {
+diff --git a/src/virglrenderer.h b/src/virglrenderer.h
+index 0bcafef4..5daaef76 100644
+--- a/src/virglrenderer.h
++++ b/src/virglrenderer.h
+@@ -451,6 +451,16 @@ struct virgl_renderer_resource_import_blob_args
+ VIRGL_EXPORT int
+ virgl_renderer_resource_import_blob(const struct virgl_renderer_resource_import_blob_args *args);
+ 
++/*
++ * Gives a VIRGL_RENDERER_BLOB_MEM_GUEST resource a dma-buf aliasing its guest
++ * pages, for example an udmabuf created by the VMM from guest RAM, so that
++ * contexts which can only import dma-bufs (DRM native contexts) can use it.
++ * The resource keeps its iovecs.  Call this before the resource is attached
++ * to a context.  On success, virglrenderer takes ownership of fd.
++ */
++VIRGL_EXPORT int
++virgl_renderer_resource_set_guest_dmabuf(uint32_t res_handle, int fd);
++
+ #define VIRGL_RENDERER_FENCE_FLAG_MERGEABLE      (1 << 0)
+ VIRGL_EXPORT int virgl_renderer_context_create_fence(uint32_t ctx_id,
+                                                      uint32_t flags,
