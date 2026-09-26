@@ -272,6 +272,9 @@ struct VirtIOGPUGL {
      * whether it draws through virgl, Venus or DRM native context.
      */
     uint32_t contexts_created[VIRTIO_GPU_CAPSET_DRM + 1];
+
+    /* give guest-memory blobs a udmabuf (DRM native context + memfd RAM) */
+    bool have_udmabuf;
 };
 
 struct VhostUserGPU {
@@ -397,6 +400,7 @@ bool virtio_gpu_scanout_blob_to_fb(struct virtio_gpu_framebuffer *fb,
 /* virtio-gpu-udmabuf.c */
 bool virtio_gpu_have_udmabuf(void);
 bool virtio_gpu_init_udmabuf(struct virtio_gpu_simple_resource *res);
+int virtio_gpu_create_udmabuf_fd(struct virtio_gpu_simple_resource *res);
 void virtio_gpu_fini_udmabuf(struct virtio_gpu_simple_resource *res);
 int virtio_gpu_update_dmabuf(VirtIOGPU *g,
                              uint32_t scanout_id,

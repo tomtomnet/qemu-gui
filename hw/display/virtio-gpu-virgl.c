@@ -864,6 +864,35 @@ static void virgl_cmd_get_capset(VirtIOGPU *g,
 }
 
 #if VIRGL_VERSION_MAJOR >= 1
+#ifdef HAVE_VIRGL_RESOURCE_SET_GUEST_DMABUF
+/*
+ * DRM native contexts can only import dma-bufs.  Give shareable guest-memory
+ * blobs, such as dma-bufs of other guest devices imported by the guest
+ * virtio-gpu driver, a udmabuf aliasing their pages so that native contexts
+ * can use them instead of rejecting them.
+ */
+static void
+virgl_resource_set_guest_dmabuf(VirtIOGPU *g,
+                                struct virtio_gpu_virgl_resource *res)
+{
+    VirtIOGPUGL *gl = VIRTIO_GPU_GL(g);
+    int fd;
+
+    if (!gl->have_udmabuf) {
+        return;
+    }
+
+    fd = virtio_gpu_create_udmabuf_fd(&res->base);
+    if (fd < 0) {
+        return;
+    }
+
+    if (virgl_renderer_resource_set_guest_dmabuf(res->base.resource_id, fd)) {
+        close(fd);
+    }
+}
+#endif
+
 static void virgl_cmd_resource_create_blob(VirtIOGPU *g,
                                            struct virtio_gpu_ctrl_command *cmd)
 {
@@ -925,6 +954,13 @@ static void virgl_cmd_resource_create_blob(VirtIOGPU *g,
         virtio_gpu_cleanup_mapping(g, &res->base);
         return;
     }
+
+#ifdef HAVE_VIRGL_RESOURCE_SET_GUEST_DMABUF
+    if (cblob.blob_mem == VIRTIO_GPU_BLOB_MEM_GUEST &&
+        (cblob.blob_flags & VIRTIO_GPU_BLOB_FLAG_USE_SHAREABLE)) {
+        virgl_resource_set_guest_dmabuf(g, res);
+    }
+#endif
 
     ret = virgl_renderer_resource_get_info(cblob.resource_id, &info);
     if (ret) {
@@ -1543,6 +1579,11 @@ static int virtio_gpu_virgl_init(VirtIOGPU *g)
 
     gl->fence_poll = timer_new_ms(QEMU_CLOCK_VIRTUAL,
                                   virtio_gpu_fence_poll, g);
+
+#ifdef HAVE_VIRGL_RESOURCE_SET_GUEST_DMABUF
+    gl->have_udmabuf = virtio_gpu_drm_enabled(g->parent_obj.conf) &&
+                       virtio_gpu_have_udmabuf();
+#endif
 
     if (virtio_gpu_stats_enabled(g->parent_obj.conf)) {
         gl->print_stats = timer_new_ms(QEMU_CLOCK_VIRTUAL,

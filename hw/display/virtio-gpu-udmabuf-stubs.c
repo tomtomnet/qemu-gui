@@ -13,6 +13,12 @@ bool virtio_gpu_init_udmabuf(struct virtio_gpu_simple_resource *res)
     return false;
 }
 
+int virtio_gpu_create_udmabuf_fd(struct virtio_gpu_simple_resource *res)
+{
+    /* nothing (stub) */
+    return -1;
+}
+
 void virtio_gpu_fini_udmabuf(struct virtio_gpu_simple_resource *res)
 {
     /* nothing (stub) */

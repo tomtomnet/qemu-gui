@@ -27,22 +27,31 @@
 #include "standard-headers/linux/udmabuf.h"
 #include "standard-headers/drm/drm_fourcc.h"
 
-static void virtio_gpu_create_udmabuf(struct virtio_gpu_simple_resource *res)
+/*
+ * Creates a udmabuf aliasing the guest RAM pages backing @res and returns its
+ * fd, or -1.  @ioctl_errno is set when the UDMABUF_CREATE_LIST ioctl itself
+ * fails and is 0 otherwise.
+ */
+static int
+virtio_gpu_udmabuf_create_list(struct virtio_gpu_simple_resource *res,
+                               int *ioctl_errno)
 {
     struct udmabuf_create_list *list;
     RAMBlock *rb;
     ram_addr_t offset;
-    int udmabuf, i;
+    int udmabuf, fd, i;
+
+    *ioctl_errno = 0;
 
     udmabuf = udmabuf_fd();
     if (udmabuf < 0) {
-        return;
+        return -1;
     }
 
     list = g_try_malloc0(sizeof(struct udmabuf_create_list) +
                          sizeof(struct udmabuf_create_item) * res->iov_cnt);
     if (!list) {
-        return;
+        return -1;
     }
 
     for (i = 0; i < res->iov_cnt; i++) {
@@ -52,7 +61,7 @@ static void virtio_gpu_create_udmabuf(struct virtio_gpu_simple_resource *res)
 
         if (!rb || rb->fd < 0) {
             g_free(list);
-            return;
+            return -1;
         }
 
         list->list[i].memfd  = rb->fd;
@@ -63,12 +72,46 @@ static void virtio_gpu_create_udmabuf(struct virtio_gpu_simple_resource *res)
     list->count = res->iov_cnt;
     list->flags = UDMABUF_FLAGS_CLOEXEC;
 
-    res->dmabuf_fd = ioctl(udmabuf, UDMABUF_CREATE_LIST, list);
-    if (res->dmabuf_fd < 0) {
-        warn_report("%s: UDMABUF_CREATE_LIST: %s", __func__,
-                    strerror(errno));
+    fd = ioctl(udmabuf, UDMABUF_CREATE_LIST, list);
+    if (fd < 0) {
+        *ioctl_errno = errno;
     }
     g_free(list);
+
+    return fd;
+}
+
+static void virtio_gpu_create_udmabuf(struct virtio_gpu_simple_resource *res)
+{
+    int err;
+
+    res->dmabuf_fd = virtio_gpu_udmabuf_create_list(res, &err);
+    if (err) {
+        warn_report("%s: UDMABUF_CREATE_LIST: %s", __func__, strerror(err));
+    }
+}
+
+/*
+ * Returns a udmabuf aliasing the guest pages of @res without mapping it, for
+ * resources that are handed over to the renderer.  Failures, such as hitting
+ * the udmabuf list_limit or size_limit_mb module parameters, are reported
+ * once.
+ */
+int virtio_gpu_create_udmabuf_fd(struct virtio_gpu_simple_resource *res)
+{
+    int err, fd;
+
+    if (!res->iov_cnt) {
+        return -1;
+    }
+
+    fd = virtio_gpu_udmabuf_create_list(res, &err);
+    if (err) {
+        warn_report_once("%s: UDMABUF_CREATE_LIST: %s", __func__,
+                         strerror(err));
+    }
+
+    return fd;
 }
 
 static void virtio_gpu_remap_udmabuf(struct virtio_gpu_simple_resource *res)

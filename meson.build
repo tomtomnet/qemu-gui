@@ -2549,6 +2549,10 @@ if virgl.found()
   config_host_data.set('VIRGL_VERSION_MAJOR', virgl.version().split('.')[0])
   config_host_data.set('VIRGL_VERSION_MINOR', virgl.version().split('.')[1])
   config_host_data.set('VIRGL_VERSION_MICRO', virgl.version().split('.')[2])
+  config_host_data.set('HAVE_VIRGL_RESOURCE_SET_GUEST_DMABUF',
+                       cc.has_function('virgl_renderer_resource_set_guest_dmabuf',
+                                       prefix: '#include <virglrenderer.h>',
+                                       dependencies: virgl))
 endif
 config_host_data.set('CONFIG_VIRTFS', have_virtfs)
 config_host_data.set('CONFIG_VTE', vte.found())
