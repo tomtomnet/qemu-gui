@@ -1582,6 +1582,168 @@
   'returns': 'DisplayOptions' }
 
 ##
+# @DisplayStatsMethod:
+#
+# How a display learns when its frames reach the screen.
+#
+# @none: no frame has been shown yet
+#
+# @swap: when the buffer swap returned.  The latencies then end when
+#     QEMU hands a frame to the window system: the compositor's share
+#     is left out.  This is so on X11, or with a Wayland compositor
+#     without presentation feedback.
+#
+# @presentation: when the compositor showed the frame, from its
+#     Wayland presentation feedback (wp_presentation)
+#
+# Since: 11.2
+##
+{ 'enum': 'DisplayStatsMethod',
+  'data': [ 'none', 'swap', 'presentation' ] }
+
+##
+# @DisplayStatsLatency:
+#
+# The distribution of a duration over the time a statistic covers.
+#
+# @samples: number of measurements; the other members are 0 if there
+#     are none
+#
+# @median: median, in microseconds
+#
+# @p99: 99th percentile, in microseconds
+#
+# @max: maximum, in microseconds
+#
+# Since: 11.2
+##
+{ 'struct': 'DisplayStatsLatency',
+  'data': { 'samples': 'int', 'median': 'int', 'p99': 'int',
+            'max': 'int' } }
+
+##
+# @DisplayStatsConsole:
+#
+# Frame statistics of the window of a graphic console, over the last
+# second unless said otherwise.
+#
+# @console: the console index
+#
+# @width: width of the guest display, in pixels
+#
+# @height: height of the guest display, in pixels
+#
+# @refresh-rate: refresh rate of the host monitor showing the window,
+#     in mHz; 0 if unknown
+#
+# @method: how the times frames reach the screen are known
+#
+# @flushes: guest display updates per second: the flushes of a GPU
+#     scanout, or the updates of a 2D display, those found in one
+#     refresh counting as one
+#
+# @presented: guest frames per second that reached the screen
+#
+# @dropped: guest frames per second that never did, because a newer
+#     one replaced them first: in QEMU, when updates come faster than
+#     it redraws a 2D display, or in the compositor, when frames come
+#     faster than the monitor shows them
+#
+# @direct: frames per second the compositor scanned out directly,
+#     without composing them (zero-copy feedback)
+#
+# @redraws: frames per second QEMU presented without new guest
+#     content: menu, resize or expose redraws
+#
+# @frame-latency: from QEMU receiving a guest flush to that frame on
+#     screen (to the end of its buffer swap with @method swap)
+#
+# @qemu-latency: from QEMU receiving a guest flush to the end of the
+#     buffer swap showing it: QEMU's share of @frame-latency
+#
+# @frame-interval: the time between two guest frames on screen
+#
+# @input-latency: from a key press, click or wheel turn in the window
+#     to the first guest frame on screen that the guest flushed after
+#     the event reached it.  Measured only when the guest had flushed
+#     nothing for 50 ms before, so that the frame is likely its
+#     answer, and over the last 10 seconds.  It starts when the
+#     compositor sent the event, else, when its times are unknown or
+#     wrong, when the display read it.
+#
+# @input-wait: how long input events waited before the display read
+#     them, from the time the compositor sent them: the display reads
+#     input on its refresh timer.  Absent if those times cannot be
+#     known (X11); no samples if they proved wrong, as with some
+#     virtual input devices.
+#
+# Since: 11.2
+##
+{ 'struct': 'DisplayStatsConsole',
+  'data': { 'console': 'int', 'width': 'int', 'height': 'int',
+            'refresh-rate': 'int', 'method': 'DisplayStatsMethod',
+            'flushes': 'number', 'presented': 'number',
+            'dropped': 'number', 'direct': 'number',
+            'redraws': 'number',
+            'frame-latency': 'DisplayStatsLatency',
+            'qemu-latency': 'DisplayStatsLatency',
+            'frame-interval': 'DisplayStatsLatency',
+            'input-latency': 'DisplayStatsLatency',
+            '*input-wait': 'DisplayStatsLatency' } }
+
+##
+# @DisplayStats:
+#
+# Frame statistics of the display.
+#
+# @type: the display in use
+#
+# @consoles: the consoles whose frames the display measures.  Empty
+#     if it measures none: only the SDL display does.
+#
+# Since: 11.2
+##
+{ 'struct': 'DisplayStats',
+  'data': { 'type': 'DisplayType', 'consoles': [ 'DisplayStatsConsole' ] } }
+
+##
+# @x-query-display-stats:
+#
+# Return how many guest frames the display shows, how long they take
+# to reach the screen, and how long input takes to change them.
+#
+# Features:
+#
+# @unstable: This command is experimental.
+#
+# Since: 11.2
+#
+# .. qmp-example::
+#
+#     -> { "execute": "x-query-display-stats" }
+#     <- { "return": {
+#              "type": "sdl",
+#              "consoles": [
+#                  { "console": 0, "width": 1920, "height": 1080,
+#                    "refresh-rate": 240000, "method": "presentation",
+#                    "flushes": 240.0, "presented": 240.0,
+#                    "dropped": 0.0, "direct": 0.0, "redraws": 0.0,
+#                    "frame-latency": { "samples": 240, "median": 6100,
+#                                       "p99": 7900, "max": 8200 },
+#                    "qemu-latency": { "samples": 240, "median": 210,
+#                                      "p99": 420, "max": 510 },
+#                    "frame-interval": { "samples": 239, "median": 4166,
+#                                        "p99": 4180, "max": 4200 },
+#                    "input-latency": { "samples": 3, "median": 11000,
+#                                       "p99": 14000, "max": 14000 },
+#                    "input-wait": { "samples": 120, "median": 2000,
+#                                    "p99": 4000, "max": 4000 } } ] } }
+##
+{ 'command': 'x-query-display-stats',
+  'returns': 'DisplayStats',
+  'features': [ 'unstable' ] }
+
+##
 # @DisplayReloadType:
 #
 # Available DisplayReload types.

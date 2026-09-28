@@ -29,6 +29,27 @@
 #include <png.h>
 #endif
 
+/* The display in use, if it measures its frames */
+static void (*display_stats_query)(DisplayStats *stats);
+
+void qemu_display_set_stats(void (*query)(DisplayStats *stats))
+{
+    display_stats_query = query;
+}
+
+DisplayStats *qmp_x_query_display_stats(Error **errp)
+{
+    DisplayOptions *opts = qmp_query_display_options(NULL);
+    DisplayStats *stats = g_new0(DisplayStats, 1);
+
+    stats->type = opts->type;
+    qapi_free_DisplayOptions(opts);
+    if (display_stats_query) {
+        display_stats_query(stats);
+    }
+    return stats;
+}
+
 void qmp_set_password(SetPasswordOptions *opts, Error **errp)
 {
     if (opts->protocol == DISPLAY_PROTOCOL_SPICE) {

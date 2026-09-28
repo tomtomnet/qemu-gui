@@ -52,6 +52,7 @@ struct sdl2_console {
     bool menu_presented;    /* a frame was presented since the last refresh */
     bool menu_stale;        /* the menu changed and is not on screen yet */
     int menu_top;           /* window rows taken by the docked menu bar */
+    struct sdl2_stats *stats;   /* frame statistics, see sdl2-stats.c */
 #ifdef CONFIG_OPENGL
     QemuGLShader *gls;
     egl_fb guest_fb;
@@ -82,6 +83,31 @@ void sdl2_clipboard_update(void);
 void sdl2_clipboard_focus(void);
 /* A key or mouse button was pressed in a window of the display */
 void sdl2_clipboard_input(void);
+
+/*
+ * Frame statistics for x-query-display-stats, see sdl2-stats.c.  The hooks
+ * do nothing for a console without statistics.
+ */
+void sdl2_stats_init(struct sdl2_console *consoles, int count);
+void sdl2_stats_fini(void);
+/* The window of @scon was destroyed or is about to be created */
+void sdl2_stats_window_changed(struct sdl2_console *scon);
+/* The guest flushed a frame, or updated a 2D display */
+void sdl2_stats_flush(struct sdl2_console *scon);
+/* 2D updates between these two count as one flush: those of one refresh */
+void sdl2_stats_refresh_begin(struct sdl2_console *scon);
+void sdl2_stats_refresh_end(struct sdl2_console *scon);
+/* Around the swap or render present that shows a frame */
+void sdl2_stats_present_begin(struct sdl2_console *scon);
+void sdl2_stats_present_end(struct sdl2_console *scon);
+/*
+ * An input event went to the guest; @answered if the guest likely answers
+ * it with a frame: a key press, a click or a wheel turn
+ */
+void sdl2_stats_input(struct sdl2_console *scon, const SDL_Event *ev,
+                      bool answered);
+/* Handles the compositor's presentation feedback, after SDL read events */
+void sdl2_stats_dispatch(void);
 
 void sdl2_process_key(struct sdl2_console *scon,
                       SDL_KeyboardEvent *ev);

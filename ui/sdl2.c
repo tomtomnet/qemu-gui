@@ -170,6 +170,7 @@ void sdl2_window_create(struct sdl2_console *scon)
         return;
     }
     assert(!scon->real_window);
+    sdl2_stats_window_changed(scon);
 
     if (gui_fullscreen) {
         flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
@@ -229,6 +230,7 @@ void sdl2_window_destroy(struct sdl2_console *scon)
     if (!scon->real_window) {
         return;
     }
+    sdl2_stats_window_changed(scon);
 
 #ifdef CONFIG_SDL_GUI
     if (sdl2_gui_window() == scon->real_window) {
@@ -651,6 +653,9 @@ static void handle_keydown(SDL_Event *ev)
     }
     if (!scon->gui_keysym) {
         sdl2_process_key(scon, &ev->key);
+        if (qemu_console_is_graphic(scon->dcl.con)) {
+            sdl2_stats_input(scon, ev, !ev->key.repeat);
+        }
     }
 }
 
@@ -664,6 +669,9 @@ static void handle_keyup(SDL_Event *ev)
 
     scon->ignore_hotkeys = false;
     sdl2_process_key(scon, &ev->key);
+    if (qemu_console_is_graphic(scon->dcl.con)) {
+        sdl2_stats_input(scon, ev, false);
+    }
 }
 
 static void handle_textinput(SDL_Event *ev)
@@ -700,6 +708,7 @@ static void handle_mousemotion(SDL_Event *ev)
     dy = (int64_t)ev->motion.yrel * surf_h / scr_h;
     if (gui_grab || qemu_input_is_absolute(scon->dcl.con) || absolute_enabled) {
         sdl_send_mouse_event(scon, dx, dy, x, y, ev->motion.state);
+        sdl2_stats_input(scon, ev, false);
     }
 }
 
@@ -732,6 +741,7 @@ static void handle_mousebutton(SDL_Event *ev)
             buttonstate &= ~SDL_BUTTON(bev->button);
         }
         sdl_send_mouse_event(scon, 0, 0, x, y, buttonstate);
+        sdl2_stats_input(scon, ev, ev->type == SDL_MOUSEBUTTONDOWN);
     }
 }
 
@@ -761,6 +771,7 @@ static void handle_mousewheel(SDL_Event *ev)
     qemu_input_event_sync();
     qemu_input_queue_btn(scon->dcl.con, btn, false);
     qemu_input_event_sync();
+    sdl2_stats_input(scon, ev, true);
 }
 
 static void handle_windowevent(SDL_Event *ev)
@@ -986,6 +997,9 @@ void sdl2_poll_events(struct sdl2_console *scon)
         }
     }
 
+    /* SDL read the compositor's events, the presentation feedback too */
+    sdl2_stats_dispatch();
+
     busy_interval = scon->busy_interval ? scon->busy_interval :
                                           SDL2_REFRESH_INTERVAL_BUSY;
     max_idle_count = SDL2_BUSY_TIMEOUT / busy_interval + 1;
@@ -1146,6 +1160,7 @@ static void sdl_cleanup(void)
         qkbd_state_free(sdl2_console[i].kbd);
         sdl2_window_destroy(&sdl2_console[i]);
     }
+    sdl2_stats_fini();
     menu_scon = NULL;
     g_clear_pointer(&sdl2_console, g_free);
     sdl2_num_outputs = 0;
@@ -1295,6 +1310,7 @@ static void sdl2_display_init(DisplayState *ds, DisplayOptions *o)
         return;
     }
     sdl2_console = g_new0(struct sdl2_console, sdl2_num_outputs);
+    sdl2_stats_init(sdl2_console, sdl2_num_outputs);
     for (i = 0; i < sdl2_num_outputs; i++) {
         QemuConsole *con = qemu_console_lookup_by_index(i);
         const DisplayChangeListenerOps *ops = &dcl_2d_ops;

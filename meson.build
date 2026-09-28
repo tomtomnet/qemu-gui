@@ -1648,6 +1648,20 @@ else
   sdl_image = not_found
 endif
 
+# The SDL display asks the Wayland compositor when its frames are shown,
+# for its frame statistics (x-query-display-stats)
+wayland_client = not_found
+wayland_scanner = not_found
+if sdl.found() and host_os == 'linux'
+  wayland_client = dependency('wayland-client', required: false,
+                              method: 'pkg-config')
+  wayland_scanner = find_program('wayland-scanner', required: false,
+                                 native: true)
+  if not wayland_scanner.found()
+    wayland_client = not_found
+  endif
+endif
+
 rbd = not_found
 if not get_option('rbd').auto() or have_block
   librados = cc.find_library('rados', required: get_option('rbd'))
@@ -2513,6 +2527,7 @@ config_host_data.set('CONFIG_SAFESTACK', get_option('safe_stack'))
 config_host_data.set('CONFIG_SDL', sdl.found())
 config_host_data.set('CONFIG_SDL_IMAGE', sdl_image.found())
 config_host_data.set('CONFIG_SDL_GUI', imgui.found())
+config_host_data.set('CONFIG_SDL_WAYLAND', wayland_client.found())
 config_host_data.set('CONFIG_SECCOMP', seccomp.found())
 if seccomp.found()
   config_host_data.set('CONFIG_SECCOMP_SYSRAWRC', seccomp_has_sysrawrc)
@@ -4924,6 +4939,7 @@ summary_info += {'D-Bus display':     dbus_display}
 summary_info += {'SDL support':       sdl}
 summary_info += {'SDL image support': sdl_image}
 summary_info += {'SDL control menu':  imgui}
+summary_info += {'SDL Wayland presentation feedback': wayland_client}
 summary_info += {'GTK support':       gtk}
 summary_info += {'pixman':            pixman}
 summary_info += {'VTE support':       vte}

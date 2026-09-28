@@ -169,8 +169,23 @@ if sdl.found()
     'sdl2-2d.c',
     'sdl2-clipboard.c',
     'sdl2-input.c',
+    'sdl2-stats.c',
     'sdl2.c',
   ))
+  if wayland_client.found()
+    presentation_time = files('wayland/presentation-time.xml')
+    sdl_ss.add(wayland_client,
+               custom_target('presentation-time-client-protocol.h',
+                             input: presentation_time,
+                             output: 'presentation-time-client-protocol.h',
+                             command: [wayland_scanner, 'client-header',
+                                       '@INPUT@', '@OUTPUT@']),
+               custom_target('presentation-time-protocol.c',
+                             input: presentation_time,
+                             output: 'presentation-time-protocol.c',
+                             command: [wayland_scanner, 'private-code',
+                                       '@INPUT@', '@OUTPUT@']))
+  endif
   sdl_ss.add(when: opengl, if_true: files('sdl2-gl.c'))
   sdl_ss.add(when: x11, if_true: files('x_keymap.c'))
   sdl_ss.add(when: imgui, if_true: [imgui, files('sdl2-gui.cpp', 'sdl2-gui-vm.c')])

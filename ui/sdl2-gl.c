@@ -60,7 +60,9 @@ static void sdl2_gl_render_surface(struct sdl2_console *scon)
 
     surface_gl_render_texture(scon->gls, scon->surface);
     sdl2_draw_menu(scon);
+    sdl2_stats_present_begin(scon);
     SDL_GL_SwapWindow(scon->real_window);
+    sdl2_stats_present_end(scon);
 }
 
 void sdl2_gl_update(DisplayChangeListener *dcl,
@@ -77,6 +79,7 @@ void sdl2_gl_update(DisplayChangeListener *dcl,
     SDL_GL_MakeCurrent(scon->real_window, scon->winctx);
     surface_gl_update_texture(scon->gls, scon->surface, x, y, w, h);
     scon->updates++;
+    sdl2_stats_flush(scon);
 }
 
 void sdl2_gl_switch(DisplayChangeListener *dcl,
@@ -117,7 +120,9 @@ void sdl2_gl_refresh(DisplayChangeListener *dcl)
 
     assert(scon->opengl);
 
+    sdl2_stats_refresh_begin(scon);
     qemu_console_hw_update(dcl->con);
+    sdl2_stats_refresh_end(scon);
     if (scon->updates && scon->real_window) {
         scon->updates = 0;
         scon->frames++;
@@ -145,7 +150,9 @@ static void sdl2_gl_scanout_present(struct sdl2_console *scon)
     egl_fb_blit(&scon->win_fb, &scon->guest_fb, !scon->y0_top);
 
     sdl2_draw_menu(scon);
+    sdl2_stats_present_begin(scon);
     SDL_GL_SwapWindow(scon->real_window);
+    sdl2_stats_present_end(scon);
 }
 
 void sdl2_gl_redraw(struct sdl2_console *scon)
@@ -263,6 +270,7 @@ void sdl2_gl_scanout_flush(DisplayChangeListener *dcl,
     assert(scon->opengl);
     if (scon->scanout_mode && scon->guest_fb.framebuffer) {
         scon->frames++;
+        sdl2_stats_flush(scon);
     }
     sdl2_gl_scanout_present(scon);
 }

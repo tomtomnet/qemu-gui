@@ -138,6 +138,14 @@ input_event_sync(void) ""
 sdl2_clipboard_host(const char *what, size_t len) "host clipboard: %s (%zu bytes)"
 sdl2_clipboard_guest(const char *what, size_t len) "guest copy: %s (%zu bytes)"
 
+# sdl2-stats.c
+sdl2_stats_presentation(bool found, int clock) "wp_presentation %d, clock %d"
+sdl2_stats_flush(int con, uint64_t seq, int64_t t) "con %d flush %" PRIu64 " at %" PRId64
+sdl2_stats_swap(int con, uint64_t seq, int64_t flush, int64_t t) "con %d swap of flush %" PRIu64 " (at %" PRId64 ") done at %" PRId64
+sdl2_stats_presented(int con, uint64_t seq, int64_t t, int64_t after_swap, uint32_t flags) "con %d flush %" PRIu64 " on screen at %" PRId64 ", %" PRId64 " ns after the swap, flags 0x%x"
+sdl2_stats_discarded(int con, uint64_t seq) "con %d frame of flush %" PRIu64 " discarded"
+sdl2_stats_input(int con, uint32_t type, int64_t t, int64_t wait, bool answered) "con %d event 0x%x read at %" PRId64 ", waited %" PRId64 " ns, answer watched %d"
+
 # sdl2-input.c
 sdl2_process_key(int sdl_scancode, unsigned int lnx, const char *action) "translated SDL scancode %d to Linux scancode %u (%s)"
 

@@ -417,6 +417,11 @@ struct QemuDisplay {
 };
 
 void qemu_display_register(QemuDisplay *ui);
+/*
+ * The display in use fills in the consoles of x-query-display-stats: those
+ * whose frames it measures
+ */
+void qemu_display_set_stats(void (*query)(DisplayStats *stats));
 bool qemu_display_find_default(DisplayOptions *opts);
 void qemu_display_early_init(DisplayOptions *opts);
 void qemu_display_init(DisplayState *ds, DisplayOptions *opts);

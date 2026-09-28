@@ -81,6 +81,23 @@ contexts**.
   booted. A guest offered native context that only creates virgl contexts
   has a Mesa without native context support for the GPU.
   [qemu-gui-manager](https://github.com/tomtomnet/qemu-gui-manager) shows it.
+- **ui/sdl2: frame statistics** (branch `perf-stats`): the SDL display
+  measures its frames, and the QMP command `x-query-display-stats` returns
+  them for the last second, as median, 99th percentile and maximum:
+  - frames on screen, guest flushes and dropped frames per second;
+  - **frame latency**, from QEMU receiving the guest's flush to the
+    compositor showing the frame. On Wayland the compositor says when, in
+    its presentation feedback (`wp_presentation`); on X11 the latency ends
+    when the buffer swap returns, which leaves the compositor out;
+  - QEMU's share of it (flush to buffer swap), and the time between frames;
+  - **input latency**, from a key press or click to the guest's first frame
+    on screen after it, when the guest was idle before, and how long input
+    waited for the display, which reads it on its refresh timer.
+
+  [qemu-gui-manager](https://github.com/tomtomnet/qemu-gui-manager) shows
+  them in its status bar. The presentation feedback needs `wayland-devel`
+  when building: configure's summary says `SDL Wayland presentation
+  feedback: YES`. `-trace 'sdl2_stats*'` logs each frame.
 - **virtio-gpu-gl: disable the scanouts on reset in the main thread**: a
   fix. A guest reset of `virtio-gpu-gl` ran display work in a vCPU thread,
   and with `-display dbus,gl=on` QEMU aborted there

@@ -51,7 +51,9 @@ static void sdl2_2d_draw(struct sdl2_console *scon, int x, int y, int w, int h)
     SDL_RenderClear(scon->real_renderer);
     SDL_RenderCopy(scon->real_renderer, scon->texture, NULL, NULL);
     sdl2_draw_menu(scon);
+    sdl2_stats_present_begin(scon);
     SDL_RenderPresent(scon->real_renderer);
+    sdl2_stats_present_end(scon);
 }
 
 void sdl2_2d_update(DisplayChangeListener *dcl,
@@ -61,6 +63,7 @@ void sdl2_2d_update(DisplayChangeListener *dcl,
 
     assert(!scon->opengl);
     scon->frames++;
+    sdl2_stats_flush(scon);
     sdl2_2d_draw(scon, x, y, w, h);
 }
 
@@ -137,7 +140,9 @@ void sdl2_2d_refresh(DisplayChangeListener *dcl)
     struct sdl2_console *scon = container_of(dcl, struct sdl2_console, dcl);
 
     assert(!scon->opengl);
+    sdl2_stats_refresh_begin(scon);
     qemu_console_hw_update(dcl->con);
+    sdl2_stats_refresh_end(scon);
     sdl2_poll_events(scon);
 }
 
